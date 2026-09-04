@@ -1,0 +1,1340 @@
+<!doctype html>
+<!-- TimeTracker pomodoro overlay UI.
+     Loaded once per visible stretch by ttprompt (WKWebView) and then driven
+     in place: Swift calls ttSetState() with the current pomodoro phase, and
+     this page crossfades between views. It is never reloaded to change
+     state — that reload is what used to flash the desktop between the
+     tomato and the break.
+
+     Deliberately almost text-free: the tomato and the clock say it. The
+     shortcuts live behind the small ⓘ, revealed on hover.
+
+     Choices go to Swift via webkit.messageHandlers.choice. Opened in a plain
+     browser they fall back to console.log, and #demo=<view> renders one view
+     standalone for visual testing (#demo=game opens the easter egg on a
+     break). No network, no libraries. -->
+<html lang="en"><head><meta charset="utf-8">
+<title>Pomodoro</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
+html,body{width:100%;height:100%;overflow:hidden}
+body{background:radial-gradient(ellipse at 50% 44%,#3a1214 0%,#170909 62%,#0c0505 100%);
+color:#f6efe9;font:17px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;
+cursor:default;opacity:0;transition:opacity .28s ease}
+body.up{opacity:1}
+/* The whole stage crossfades on a view change; nothing is ever swapped
+   while visible, so a transition never shows a half-built screen. */
+#stage{position:absolute;inset:0;display:flex;flex-direction:column;
+align-items:center;justify-content:center;gap:3.2vh;text-align:center;
+opacity:1;transform:scale(1);
+transition:opacity .22s ease,transform .22s ease}
+#stage.out{opacity:0;transform:scale(.97)}
+#tomato{font-size:32vh;line-height:1;filter:drop-shadow(0 3vh 6vh rgba(0,0,0,.55));
+animation:breathe 3.4s ease-in-out infinite;transform-origin:50% 60%}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+#tomato.swell{animation:swell .28s ease-in forwards}
+@keyframes swell{to{transform:scale(1.32)}}
+#tomato.gone{visibility:hidden}
+#big{font-size:8.4vh;font-weight:200;font-variant-numeric:tabular-nums;
+letter-spacing:.02em;min-height:1px}
+#big.over{color:#ff9d8a}
+#dots{font-size:2vh;letter-spacing:.5vh;opacity:.5}
+#buttons{display:flex;gap:1.6vh;align-items:center}
+button{font:inherit;font-size:2.4vh;padding:1.5vh 3.4vh;border-radius:2.4vh;
+cursor:pointer;border:1px solid rgba(255,255,255,.18);
+background:rgba(255,255,255,.06);color:#f6efe9;
+transition:background .15s ease,border-color .15s ease,transform .1s ease}
+button:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.32)}
+button:active{transform:scale(.97)}
+button.primary{background:#e5484d;border-color:#e5484d;color:#fff;font-weight:600}
+button.primary:hover{background:#f2565b;border-color:#f2565b}
+button.ghost{background:transparent;border-color:transparent;opacity:.55;font-size:2vh}
+button.ghost:hover{opacity:1;background:rgba(255,255,255,.08)}
+/* info affordance */
+#info{position:fixed;right:3.2vh;bottom:3.2vh;width:4.4vh;height:4.4vh;
+border-radius:50%;border:1px solid rgba(255,255,255,.22);
+display:flex;align-items:center;justify-content:center;
+font-size:2.2vh;font-style:italic;font-family:Georgia,serif;
+color:rgba(255,255,255,.45);cursor:help;transition:all .18s ease}
+#info:hover{color:#f6efe9;border-color:rgba(255,255,255,.5);
+background:rgba(255,255,255,.08)}
+#tip{position:fixed;right:3.2vh;bottom:9.4vh;max-width:44vh;
+background:rgba(28,14,14,.96);border:1px solid rgba(255,255,255,.14);
+border-radius:1.4vh;padding:1.8vh 2.2vh;text-align:left;
+font-size:1.9vh;line-height:1.7;color:#e8dcd6;
+opacity:0;transform:translateY(.8vh);pointer-events:none;
+transition:opacity .18s ease,transform .18s ease}
+#info:hover+#tip,#tip:hover{opacity:1;transform:translateY(0)}
+#tip kbd{display:inline-block;min-width:3.4vh;text-align:center;
+padding:.2vh .8vh;margin-right:.8vh;border-radius:.6vh;
+border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);
+font:inherit;font-size:1.7vh}
+#tip .note{display:block;margin-top:1.2vh;opacity:.62;font-size:1.7vh}
+/* Only ever on screen while something is audibly playing. Bottom-left, so
+   it can't collide with the info bubble opposite it. */
+#hint{position:fixed;left:3.2vh;bottom:3.2vh;padding:1.2vh 1.8vh;
+border-radius:1.2vh;background:rgba(28,14,14,.9);
+border:1px solid rgba(255,255,255,.14);color:#e8dcd6;font-size:1.9vh;
+opacity:0;transform:translateY(.8vh);pointer-events:none;
+transition:opacity .22s ease,transform .22s ease}
+#hint.on{opacity:1;transform:translateY(0)}
+#hint kbd{display:inline-block;min-width:3.4vh;text-align:center;
+padding:.2vh .8vh;margin-left:.6vh;border-radius:.6vh;
+border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);
+font:inherit;font-size:1.7vh}
+.particle{position:fixed;pointer-events:none;will-change:transform,opacity}
+/* ---- the break menu -------------------------------------------------------
+   Two tools that hang off a break: the Spotify remote and a capture box for
+   Apple Reminders. Like the game below it this is its own layer above the
+   stage, because the stage is rebuilt from scratch every time the phase
+   changes and a panel you were typing in must not be rebuilt with it.
+
+   Palette: the menu's frame and the capture box use the overlay's own warm
+   off-white on near-black; the Spotify view switches to Spotify's — #121212
+   ground, #b3b3b3 secondary, #1db954 for anything live, and a white circle
+   with a black glyph for the play button, which is the one control everybody
+   already knows how to read. */
+#burger{position:fixed;left:3.2vh;top:3.2vh;width:4.4vh;height:4.4vh;
+border-radius:50%;border:1px solid rgba(255,255,255,.22);
+display:none;flex-direction:column;align-items:center;justify-content:center;
+gap:.75vh;cursor:pointer;color:rgba(255,255,255,.45);z-index:7;
+transition:color .18s ease,border-color .18s ease,background .18s ease,
+opacity .2s ease}
+#burger.show{display:flex}
+#burger span{display:block;width:1.9vh;height:.19vh;background:currentColor;
+border-radius:1px;transition:transform .2s ease,opacity .2s ease}
+#burger:hover{color:#f6efe9;border-color:rgba(255,255,255,.5);
+background:rgba(255,255,255,.08)}
+body.menuing #burger{color:#f6efe9;border-color:rgba(255,255,255,.5);
+background:rgba(255,255,255,.08)}
+body.menuing #burger span:nth-child(1){transform:translateY(.94vh) rotate(45deg)}
+body.menuing #burger span:nth-child(2){opacity:0}
+body.menuing #burger span:nth-child(3){transform:translateY(-.94vh) rotate(-45deg)}
+/* The stage steps back rather than disappearing: the break's own clock is
+   still the thing the screen is for. */
+body.menuing #stage{opacity:.13;pointer-events:none}
+body.menuing #info,body.menuing #tip,body.menuing #hint{opacity:0;pointer-events:none}
+
+#menu{position:fixed;left:3.2vh;top:9.6vh;width:42vh;z-index:6;
+display:none;flex-direction:column;overflow:hidden;
+border-radius:1.8vh;border:1px solid rgba(255,255,255,.1);
+background:rgba(17,17,17,.94);
+-webkit-backdrop-filter:blur(24px) saturate(150%);
+backdrop-filter:blur(24px) saturate(150%);
+box-shadow:0 2.4vh 6vh rgba(0,0,0,.6),0 0 0 .1vh rgba(0,0,0,.5);
+opacity:0;transform:translateY(-.9vh) scale(.985);transform-origin:2vh 0;
+transition:opacity .17s ease,transform .17s cubic-bezier(.2,.8,.3,1)}
+#menu.on{display:flex}
+#menu.up{opacity:1;transform:translateY(0) scale(1)}
+.mview{display:none;flex-direction:column;min-height:0}
+.mview.on{display:flex}
+
+/* header of a tool view: back chevron, title, nothing else */
+.mhead{display:flex;align-items:center;gap:1.2vh;padding:1.4vh 1.6vh;
+border-bottom:1px solid rgba(255,255,255,.07);flex:none}
+.mback{width:3.2vh;height:3.2vh;border-radius:50%;border:0;padding:0;flex:none;
+background:rgba(255,255,255,.07);color:#f6efe9;cursor:pointer;
+display:flex;align-items:center;justify-content:center;
+transition:background .15s ease}
+.mback:hover{background:rgba(255,255,255,.16)}
+.mback svg{width:1.5vh;height:1.5vh}
+.mtitle{font-size:1.9vh;font-weight:600;letter-spacing:.01em}
+.mesc{margin-left:auto;font-size:1.4vh;opacity:.35;letter-spacing:.06em;
+text-transform:uppercase}
+
+/* home: one row per tool */
+#mhome{padding:1vh}
+.mrow{display:flex;align-items:center;gap:1.6vh;padding:1.5vh 1.4vh;
+border-radius:1.2vh;cursor:pointer;font-size:2vh;color:#f6efe9;
+transition:background .13s ease}
+.mrow:hover{background:rgba(255,255,255,.09)}
+.mrow .glyph{width:3.4vh;height:3.4vh;flex:none;display:block;border-radius:.9vh}
+.mrow .chev{margin-left:auto;opacity:.3}
+.mrow .chev svg{width:1.4vh;height:1.4vh;display:block}
+
+/* ---- Spotify view ---- */
+#msp{background:#121212;color:#fff}
+#msp .mhead{border-bottom-color:rgba(255,255,255,.08)}
+.np{display:flex;align-items:center;gap:1.5vh;padding:1.6vh}
+.npart{width:5.6vh;height:5.6vh;border-radius:.8vh;flex:none;
+display:flex;align-items:center;justify-content:center;
+background:linear-gradient(145deg,#2a2a2a,#141414);
+border:1px solid rgba(255,255,255,.06)}
+.npart svg{width:3.2vh;height:3.2vh}
+.npt{min-width:0;display:flex;flex-direction:column;gap:.35vh}
+.npt b{font-size:1.9vh;font-weight:600;white-space:nowrap;overflow:hidden;
+text-overflow:ellipsis}
+.npt span{font-size:1.6vh;color:#b3b3b3;white-space:nowrap;overflow:hidden;
+text-overflow:ellipsis}
+.npt b.dim{color:#b3b3b3;font-weight:400}
+/* the live dot: Spotify green, and only ever on while sound is going out */
+.nplive{width:.9vh;height:.9vh;border-radius:50%;background:#1db954;flex:none;
+margin-left:auto;box-shadow:0 0 .9vh rgba(29,185,84,.8);display:none}
+.np.playing .nplive{display:block}
+
+.tr{display:flex;align-items:center;justify-content:center;gap:2.6vh;
+padding:.4vh 0 1.8vh}
+.trb{border:0;background:none;padding:0;cursor:pointer;color:#b3b3b3;
+display:flex;align-items:center;justify-content:center;
+transition:color .13s ease,transform .1s ease}
+.trb:hover{color:#fff}
+.trb:active{transform:scale(.92)}
+.trb svg{width:2.6vh;height:2.6vh;display:block}
+.trb.main{width:5.4vh;height:5.4vh;border-radius:50%;background:#fff;color:#000}
+.trb.main:hover{background:#fff;transform:scale(1.06)}
+.trb.main svg{width:2.4vh;height:2.4vh}
+.trb[disabled]{opacity:.3;cursor:default;pointer-events:none}
+
+.volrow{display:flex;align-items:center;gap:1.2vh;padding:0 1.8vh 1.8vh}
+.volrow svg{width:2vh;height:2vh;color:#b3b3b3;flex:none}
+/* A real range input, dressed as Spotify's: grey track, white fill, knob
+   only on hover, and the fill turns green while you are actually on it. */
+#vol{-webkit-appearance:none;appearance:none;flex:1;height:1.4vh;
+background:none;cursor:pointer;margin:0}
+#vol::-webkit-slider-runnable-track{height:.44vh;border-radius:.4vh;
+background:linear-gradient(#fff,#fff) 0/var(--vf,50%) 100% no-repeat,
+rgba(255,255,255,.24)}
+#vol::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+width:1.3vh;height:1.3vh;border-radius:50%;background:#fff;
+margin-top:-.43vh;opacity:0;transition:opacity .13s ease}
+.volrow:hover #vol::-webkit-slider-runnable-track{
+background:linear-gradient(#1db954,#1db954) 0/var(--vf,50%) 100% no-repeat,
+rgba(255,255,255,.24)}
+.volrow:hover #vol::-webkit-slider-thumb{opacity:1}
+
+.plhead{display:flex;align-items:baseline;gap:1vh;padding:0 1.8vh .8vh;
+font-size:1.35vh;letter-spacing:.16em;text-transform:uppercase;color:#b3b3b3}
+.plhead em{font-style:normal;opacity:.55;font-size:1.25vh;letter-spacing:.04em;
+text-transform:none;margin-left:auto}
+#pllist{overflow-y:auto;overscroll-behavior:contain;padding:0 .8vh 1vh;
+max-height:34vh;min-height:0}
+#pllist::-webkit-scrollbar{width:.7vh}
+#pllist::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);
+border-radius:.4vh}
+.pl{display:flex;align-items:center;gap:1.3vh;padding:.85vh 1vh;
+border-radius:.8vh;cursor:pointer;transition:background .12s ease}
+.pl:hover{background:rgba(255,255,255,.09)}
+.pl .sw{width:3.4vh;height:3.4vh;border-radius:.5vh;flex:none;position:relative;
+display:flex;align-items:center;justify-content:center;overflow:hidden}
+.pl .sw svg{width:1.5vh;height:1.5vh;opacity:.85;position:relative}
+.pl .sw .go{position:absolute;inset:0;display:flex;align-items:center;
+justify-content:center;background:rgba(0,0,0,.5);opacity:0;
+transition:opacity .12s ease}
+.pl:hover .sw .go{opacity:1}
+.pl .sw .go svg{width:1.4vh;height:1.4vh;opacity:1;color:#fff}
+.pl .nm{font-size:1.75vh;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plempty{padding:1.6vh 1.8vh 2vh;font-size:1.55vh;color:#b3b3b3;line-height:1.55}
+.plwork{display:flex;align-items:center;gap:1vh;flex:none;
+padding:1.2vh 1.8vh;border-top:1px solid rgba(255,255,255,.07);
+font-size:1.45vh;color:#b3b3b3}
+.plwork b{color:#fff;font-weight:500;white-space:nowrap;overflow:hidden;
+text-overflow:ellipsis}
+.plwork .tag{flex:none;font-size:1.15vh;letter-spacing:.1em;text-transform:uppercase;
+color:#1db954;border:1px solid rgba(29,185,84,.45);border-radius:.6vh;
+padding:.15vh .6vh}
+
+/* ---- capture view ---- */
+#mnote{padding:0 0 1.4vh}
+#ntext{margin:1.4vh 1.6vh 1.2vh;min-height:11vh;max-height:24vh;resize:none;
+font:inherit;font-size:1.85vh;line-height:1.5;color:#f6efe9;
+background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);
+border-radius:1.1vh;padding:1.2vh 1.3vh;user-select:text;-webkit-user-select:text}
+#ntext::placeholder{color:rgba(246,239,233,.32)}
+#ntext:focus{outline:none;border-color:rgba(246,239,233,.4);
+background:rgba(255,255,255,.08)}
+.nfoot{display:flex;align-items:center;gap:1.2vh;padding:0 1.6vh}
+.nlist{font-size:1.5vh;color:rgba(246,239,233,.5);min-width:0;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nlist b{color:rgba(246,239,233,.8);font-weight:500}
+#nsave{margin-left:auto;flex:none;font:inherit;font-size:1.7vh;font-weight:600;
+padding:.9vh 2vh;border-radius:1vh;border:0;cursor:pointer;
+background:#e5484d;color:#fff;transition:background .13s ease,opacity .13s ease}
+#nsave:hover{background:#f2565b}
+#nsave[disabled]{opacity:.35;cursor:default}
+#nstat{padding:1vh 1.6vh 0;font-size:1.5vh;min-height:2.5vh;color:rgba(246,239,233,.55)}
+#nstat.ok{color:#68d391}
+#nstat.bad{color:#ff9d8a}
+#nstat .sp{display:inline-block;width:1.4vh;height:1.4vh;border-radius:50%;
+border:.2vh solid rgba(246,239,233,.25);border-top-color:rgba(246,239,233,.8);
+vertical-align:-.2vh;margin-right:.7vh;animation:nspin .8s linear infinite}
+@keyframes nspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){#nstat .sp{animation:none}}
+
+/* ---- easter egg: tomato clicker -------------------------------------------
+   Its own layer above the stage, so the break -> break-over crossfade can
+   happen underneath a game in progress without disturbing it. */
+#tomato.play{cursor:pointer}
+body.playing #stage,body.playing #info,body.playing #tip,body.playing #hint{
+opacity:0;pointer-events:none}
+#game{position:fixed;inset:0;z-index:5;display:none;opacity:0;
+transition:opacity .32s ease}
+#game.on{display:flex}
+#game.up{opacity:1}
+#gwrap{flex:1;min-width:0;display:flex;flex-direction:column;
+align-items:center;justify-content:center;gap:.6vh}
+#score{font-size:9vh;font-weight:200;line-height:1;letter-spacing:.02em;
+font-variant-numeric:tabular-nums;transition:transform .09s ease}
+#score.pop{transform:scale(1.05)}
+#rate{font-size:1.6vh;letter-spacing:.34em;text-transform:uppercase;opacity:.42;
+font-variant-numeric:tabular-nums}
+#best{font-size:1.4vh;letter-spacing:.1em;text-transform:uppercase;opacity:.34;
+font-variant-numeric:tabular-nums;margin-top:.3vh}
+#away{margin-top:1vh;font-size:1.9vh;color:#ffcf72;opacity:0;
+transform:translateY(-.6vh);transition:opacity .5s ease,transform .5s ease}
+#away.on{opacity:.9;transform:translateY(0)}
+#tomwrap{position:relative;display:flex;align-items:center;justify-content:center;
+margin-top:2vh}
+#glow{position:absolute;width:54vh;height:54vh;border-radius:50%;
+pointer-events:none;opacity:.18;
+background:radial-gradient(circle,rgba(229,72,77,.5) 0%,rgba(229,72,77,0) 66%)}
+#gtom{font-size:30vh;line-height:1;cursor:pointer;transform-origin:50% 62%;
+filter:drop-shadow(0 3vh 6vh rgba(0,0,0,.55));will-change:transform}
+/* the shop: one line per thing, dim until you can afford it */
+#shop{width:36vh;flex:none;padding:5vh 2.6vh;display:flex;flex-direction:column;
+justify-content:center;gap:.7vh;background:rgba(0,0,0,.18);
+border-left:1px solid rgba(255,255,255,.07)}
+.item{display:flex;align-items:center;gap:1.4vh;padding:1.1vh 1.4vh;
+border-radius:1.2vh;border:1px solid transparent;opacity:.3;cursor:default;
+background:rgba(255,255,255,0);
+transition:opacity .25s ease,background .15s ease,border-color .15s ease,
+transform .1s ease}
+.item.can{opacity:1;cursor:pointer;border-color:rgba(255,255,255,.14);
+background:rgba(255,255,255,.05)}
+.item.can:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.3)}
+.item.can:active{transform:scale(.98)}
+.item .e{font-size:2.8vh;line-height:1}
+.item .b{flex:1;min-width:0}
+.item .n{font-size:1.8vh;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .c{font-size:1.5vh;opacity:.55;font-variant-numeric:tabular-nums}
+.item .q{font-size:2.4vh;font-weight:200;opacity:.42;
+font-variant-numeric:tabular-nums}
+.item.new{animation:itemin .45s ease}
+@keyframes itemin{from{opacity:0;transform:translateX(1.6vh)}}
+.item.flash{animation:buyflash .5s ease}
+@keyframes buyflash{0%{background:rgba(229,72,77,.6)}
+100%{background:rgba(255,255,255,.05)}}
+/* the break is still the point: its clock stays in the corner */
+#gfoot{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:baseline;
+gap:2.6vh;padding:2.6vh 3.4vh;font-size:1.7vh;opacity:.42;
+letter-spacing:.06em;pointer-events:none}
+#gclock{font-variant-numeric:tabular-nums}
+#greset{margin-left:auto;pointer-events:auto;cursor:pointer;
+transition:opacity .15s ease,color .15s ease}
+#greset:hover{opacity:1}
+#greset.confirm{opacity:1;color:#ff9d8a}
+#gback{pointer-events:auto;cursor:pointer;transition:opacity .15s ease}
+#gback:hover{opacity:1}
+#gfoot kbd{display:inline-block;min-width:3.2vh;text-align:center;
+padding:.2vh .8vh;margin-right:.7vh;border-radius:.6vh;
+border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);
+font:inherit;font-size:1.5vh}
+.float{position:fixed;pointer-events:none;font-weight:200;white-space:nowrap;
+font-variant-numeric:tabular-nums;will-change:transform,opacity;
+animation:floatup .95s ease-out forwards}
+@keyframes floatup{from{transform:translate(-50%,-50%) scale(.85);opacity:0}
+16%{opacity:1}to{transform:translate(-50%,-280%) scale(1.06);opacity:0}}
+.ring{position:fixed;border-radius:50%;pointer-events:none;
+border:.3vh solid rgba(255,255,255,.55);will-change:transform,opacity;
+animation:ringout .6s cubic-bezier(.2,.7,.3,1) forwards}
+@keyframes ringout{from{transform:translate(-50%,-50%) scale(.15);opacity:.75}
+to{transform:translate(-50%,-50%) scale(1);opacity:0}}
+.gold{position:fixed;font-size:9vh;line-height:1;cursor:pointer;opacity:0;
+will-change:transform,opacity;
+filter:sepia(1) saturate(3.4) hue-rotate(-6deg) brightness(1.35)
+drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
+</style></head><body>
+<div id="stage">
+  <div id="tomato">🍅</div>
+  <div id="big"></div>
+  <div id="dots"></div>
+  <div id="buttons"></div>
+</div>
+<div id="info">i</div>
+<div id="tip"></div>
+<div id="hint">Still playing something? Press <kbd>F8</kbd></div>
+<!-- The break menu. Only on screen during a break, and only for the tools the
+     watcher said are actually installed and switched on. The two marks below
+     are drawn here rather than loaded: this page has no network, and an icon
+     is the one thing a break screen may not be waiting on. -->
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-spotify" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="12" fill="#1db954"/>
+    <g fill="none" stroke="#121212" stroke-linecap="round">
+      <path d="M5.5 10.5Q12 7.2 18.5 10.5" stroke-width="2.15"/>
+      <path d="M6.8 13.6Q12 10.9 17.2 13.6" stroke-width="1.85"/>
+      <path d="M8.1 16.5Q12 14.4 15.9 16.5" stroke-width="1.5"/>
+    </g>
+  </symbol>
+  <symbol id="i-reminders" viewBox="0 0 24 24">
+    <rect width="24" height="24" rx="5.4" fill="#fdfdfd"/>
+    <g>
+      <circle cx="6.5" cy="6.2" r="1.85" fill="#ff9500"/>
+      <circle cx="6.5" cy="11.4" r="1.85" fill="#ff3b30"/>
+      <circle cx="6.5" cy="16.6" r="1.85" fill="#007aff"/>
+      <rect x="10.2" y="5.3" width="8.6" height="1.8" rx=".9" fill="#d3d3d8"/>
+      <rect x="10.2" y="10.5" width="8.6" height="1.8" rx=".9" fill="#d3d3d8"/>
+      <rect x="10.2" y="15.7" width="6.2" height="1.8" rx=".9" fill="#d3d3d8"/>
+    </g>
+  </symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none"
+    stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+    stroke-linejoin="round"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none"
+    stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+    stroke-linejoin="round"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path
+    d="M6 5v14M20 5.6v12.8L9.4 12z" fill="currentColor" stroke="currentColor"
+    stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path
+    d="M18 5v14M4 5.6v12.8L14.6 12z" fill="currentColor" stroke="currentColor"
+    stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"
+    fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path
+    d="M7 4.6h3.4v14.8H7zM13.6 4.6H17v14.8h-3.4z" fill="currentColor"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path
+    d="M4 9.2h3.6L12 5.2v13.6l-4.4-4H4zM15.6 9.4a3.7 3.7 0 010 5.2M18.4 6.8a7.4 7.4 0 010 10.4"
+    fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+    stroke-linejoin="round"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path
+    d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round"/></symbol>
+</svg>
+<div id="burger" title="Break menu"><span></span><span></span><span></span></div>
+<div id="menu">
+  <div id="mhome" class="mview">
+    <div class="mrow" data-go="sp">
+      <svg class="glyph"><use href="#i-spotify"/></svg><span>Spotify</span>
+      <span class="chev"><svg><use href="#i-chev"/></svg></span>
+    </div>
+    <div class="mrow" data-go="note">
+      <svg class="glyph"><use href="#i-reminders"/></svg><span>Add Reminder</span>
+      <span class="chev"><svg><use href="#i-chev"/></svg></span>
+    </div>
+  </div>
+  <div id="msp" class="mview">
+    <div class="mhead">
+      <button class="mback" data-go="home"><svg><use href="#i-back"/></svg></button>
+      <span class="mtitle">Spotify</span><span class="mesc">esc</span>
+    </div>
+    <div class="np" id="np">
+      <span class="npart"><svg><use href="#i-spotify"/></svg></span>
+      <span class="npt"><b id="nptrack">&hellip;</b><span id="npartist"></span></span>
+      <span class="nplive"></span>
+    </div>
+    <div class="tr">
+      <button class="trb" id="sprev" title="Previous"><svg><use href="#i-prev"/></svg></button>
+      <button class="trb main" id="splay" title="Play/Pause"><svg id="splayi"><use href="#i-play"/></svg></button>
+      <button class="trb" id="snext" title="Next"><svg><use href="#i-next"/></svg></button>
+    </div>
+    <div class="volrow"><svg><use href="#i-vol"/></svg>
+      <input id="vol" type="range" min="0" max="100" step="1" value="50"
+             aria-label="Volume"></div>
+    <div class="plhead"><span>Playlists</span><em id="plcount"></em></div>
+    <div id="pllist"></div>
+    <div class="plwork" id="plwork"></div>
+  </div>
+  <div id="mnote" class="mview">
+    <div class="mhead">
+      <button class="mback" data-go="home"><svg><use href="#i-back"/></svg></button>
+      <span class="mtitle">Add Reminder</span><span class="mesc">esc</span>
+    </div>
+    <textarea id="ntext" rows="4" spellcheck="false"
+      placeholder="Something you don't want to lose"></textarea>
+    <div class="nfoot"><span class="nlist" id="nlist"></span>
+      <button id="nsave" disabled>Save</button></div>
+    <div id="nstat"></div>
+  </div>
+</div>
+<!-- The easter egg. Hidden until the tomato on the pause screen is clicked. -->
+<div id="game">
+  <div id="gwrap">
+    <div id="score">0</div>
+    <div id="rate"></div>
+    <div id="best"></div>
+    <div id="away"></div>
+    <div id="tomwrap"><div id="glow"></div><div id="gtom">🍅</div></div>
+  </div>
+  <div id="shop"></div>
+  <div id="gfoot"><span id="gclock"></span><span id="glife"></span>
+    <span id="greset"><kbd>r</kbd><span id="greset-label">reset</span></span>
+    <span id="gback"><kbd>esc</kbd>back</span></div>
+</div>
+<script>
+"use strict";
+const $=i=>document.getElementById(i);
+let view=null;      // "tomato" | "break" | "breakover"
+let st=null;        // last state from Swift
+let busy=false;     // a choice is in flight; ignore further input
+let ticker=null;
+let auto=null;      // tomato's no-answer timeout
+
+document.body.classList.add("up");
+
+function post(choice){
+  if(busy)return;
+  busy=true;
+  menuClose(true);   // the answer is in flight; nothing may still be typed into
+  try{window.webkit.messageHandlers.choice.postMessage(choice);}
+  catch(e){console.log("choice:",choice);}
+}
+function mmss(s){s=Math.max(0,Math.round(s));
+  const m=(s/60)|0,x=s%60;
+  return String(m).padStart(2,"0")+":"+String(x).padStart(2,"0");}
+function btn(label,cls,fn){
+  const b=document.createElement("button");
+  b.textContent=label;if(cls)b.className=cls;
+  b.addEventListener("click",fn);$("buttons").appendChild(b);return b;
+}
+
+/* ---- explosion (skip): swell, burst, then report -------------------------- */
+function explode(){
+  if(busy)return;
+  busy=true;
+  menuClose(true);
+  const t=$("tomato"),r=t.getBoundingClientRect();
+  const cx=r.left+r.width/2,cy=r.top+r.height*0.58;
+  t.classList.add("swell");
+  $("big").style.opacity=0;$("dots").style.opacity=0;$("buttons").style.opacity=0;
+  setTimeout(()=>{
+    t.classList.remove("swell");t.classList.add("gone");
+    const parts=[],n=32,g=2600;
+    for(let i=0;i<n;i++){
+      const d=document.createElement("div");d.className="particle";
+      const kind=i<8?"seed":(i<20?"juice":"chunk");
+      if(kind==="seed"){d.style.width="1.1vh";d.style.height="1.6vh";
+        d.style.background="#f3d9a4";d.style.borderRadius="50%";}
+      else if(kind==="juice"){const s=1.2+Math.random()*2.2;
+        d.style.width=s+"vh";d.style.height=s+"vh";
+        d.style.background=Math.random()<.5?"#e5484d":"#b8262b";
+        d.style.borderRadius="50%";}
+      else{d.textContent="🍅";d.style.fontSize=(3+Math.random()*5)+"vh";
+        d.style.filter="brightness(.9)";}
+      d.style.left="0";d.style.top="0";
+      document.body.appendChild(d);
+      const a=Math.random()*Math.PI*2,v=500+Math.random()*900;
+      parts.push({el:d,x:cx,y:cy,vx:Math.cos(a)*v,vy:Math.sin(a)*v-450,
+        rot:Math.random()*360,vr:(Math.random()-.5)*720});
+    }
+    const t0=performance.now();let last=t0;
+    function step(ts){
+      const dt=Math.min(.05,(ts-last)/1000);last=ts;
+      const age=(ts-t0)/1000,fade=Math.max(0,1-age);
+      for(const p of parts){
+        p.vy+=g*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.rot+=p.vr*dt;
+        p.el.style.transform="translate("+p.x+"px,"+p.y+"px) rotate("+p.rot+"deg)";
+        p.el.style.opacity=fade;
+      }
+      if(age<1)requestAnimationFrame(step);
+      else{
+        for(const p of parts)p.el.remove();
+        // Report only once the burst has landed, so the next phase never
+        // clips the animation.
+        try{window.webkit.messageHandlers.choice.postMessage("skip");}
+        catch(e){console.log("choice: skip");}
+      }
+    }
+    requestAnimationFrame(step);
+  },280);
+}
+
+/* ---- views ---------------------------------------------------------------- */
+const TIPS={
+  tomato:'<kbd>&crarr;</kbd>take the break<br><kbd>esc</kbd>snooze it'+
+    '<span class="note">No answer takes the break after {S}s. Skipping counts '+
+    'the pomodoro and starts the next one.</span>',
+  break:'<kbd>&crarr;</kbd>back to work'+
+    '<span class="note">The break ends when you end it — the clock keeps '+
+    'counting and anything past the scheduled end is logged as overrun.</span>',
+  breakover:'<kbd>&crarr;</kbd>back to work'+
+    '<span class="note">Time past the scheduled end is logged as break '+
+    'overrun on this session.</span>'
+};
+
+function build(v){
+  // Any pending no-answer timeout belongs to the view we're leaving.
+  if(auto){clearTimeout(auto);auto=null;}
+  $("buttons").innerHTML="";
+  $("big").style.opacity="";$("dots").style.opacity="";$("buttons").style.opacity="";
+  $("tomato").classList.remove("gone","swell");
+  $("big").className="";
+  // auto_accept_seconds, straight from settings via Swift.
+  const secs=(st&&st.autosec>0)?st.autosec:60;
+  $("tip").innerHTML=(TIPS[v]||"").replace("{S}",secs);
+  if(v==="tomato"){
+    $("big").textContent="";
+    btn("Skip","ghost",explode);
+    btn("Snooze",null,()=>post("snooze"));
+    btn("Take break","primary",()=>post("accept"));
+    // Walked away mid-pomodoro: take the break rather than sitting here
+    // forever. Only the tomato does this; a break waits indefinitely.
+    auto=setTimeout(()=>post("accept"),secs*1000);
+  }else if(v==="break"){
+    btn("I'm back","ghost",()=>post("back-to-work"));
+  }else{ // breakover
+    $("big").className="over";
+    btn("I'm back","primary",()=>post("back-to-work"));
+  }
+  // A running break is the only view where the tomato does anything (see the
+  // easter egg below); on the prompt it's the subject of a decision, not a
+  // toy, and once the break is in overrun it stops being one again. egg is
+  // undefined in the browser-only demo views, where it should stay playable.
+  const play=(v==="break")&&st.egg!==false;
+  $("tomato").classList.toggle("play",play);
+  $("tomato").onclick=play?openGame:null;
+  // The menu belongs to the break, like the game. On the tomato the screen is
+  // a decision with an auto-accept running behind it, and a panel there would
+  // invite you to sit in one while the timeout answered for you.
+  const canMenu=(v==="break"||v==="breakover")&&
+                typeof st.menu==="string"&&st.menu!=="-";
+  $("burger").classList.toggle("show",canMenu);
+  if(!canMenu)menuClose(true);
+  paint();
+}
+
+function paint(){
+  if(!st)return;
+  // Media keys ignore window focus, so F8 reaches the player even with this
+  // panel over everything — worth saying, but only when there is something
+  // to say it about. Hidden mid-choice so it can't outlive the explosion.
+  $("hint").classList.toggle("on",!!st.audio&&!busy&&!G.on);
+  const now=Date.now()/1000;
+  if(view==="break")      $("big").textContent=mmss(st.target-now);
+  else if(view==="breakover") $("big").textContent="+"+mmss(now-st.target);
+  const cyc=Math.max(1,st.cycle||4),done=st.completed%cyc;
+  $("dots").textContent=(view==="tomato"||st.completed)
+    ? "🍅".repeat(done)+"·".repeat(cyc-done) : "";
+  // Cheaper than it looks: both of these bail immediately unless their own
+  // panel is the one on screen.
+  if(M.on){paintSpotify();paintNote();}
+}
+
+function viewFor(s){
+  const now=Date.now()/1000;
+  if(s.phase==="BREAK")return now<s.target?"break":"breakover";
+  return "tomato";
+}
+
+// Called by Swift ~2x/second with the authoritative cycle state.
+window.ttSetState=function(json){
+  let s;try{s=typeof json==="string"?JSON.parse(json):json;}catch(e){return;}
+  // The first state of a fresh page load is also the first moment we know
+  // where the current work/break cycle began (s.cycleStart) — settling the
+  // save now, rather than back in gload(), is what lets accrue() refuse to
+  // pay for whatever gap came before this cycle existed.
+  const firstState=!st;
+  st=s;
+  if(firstState){
+    const from=G.at;
+    G.away=accrue();
+    G.awaySecs=G.at-from;
+  }
+  const want=viewFor(s);
+  if(want!=="break")closeGame();    // break's done with; the garden waits
+  if(want===view){paint();return;}
+  if(view===null){view=want;busy=false;build(want);return;}
+  // A real change: fade the stage out, rebuild behind it, fade back in.
+  const stage=$("stage");
+  stage.classList.add("out");
+  setTimeout(()=>{
+    view=want;busy=false;build(want);
+    stage.classList.remove("out");
+  },220);
+};
+
+document.addEventListener("keydown",e=>{
+  // The menu owns the keyboard while it is open, and that is not a nicety:
+  // Enter ends the break, and a note is a thing you press Enter inside of.
+  if(M.on){
+    if(e.key==="Escape"){e.preventDefault();menuBack();return;}
+    if(document.activeElement===$("ntext")){
+      // Cmd/Ctrl+Enter saves; a plain Enter is a new line and nothing else.
+      if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();noteSave();}
+      return;
+    }
+    if(e.key==="Enter")e.preventDefault();
+    return;
+  }
+  // Playing swallows both keys: a stray Enter mid-click-frenzy must not end
+  // the break. Stepping out first, then Enter, still does.
+  if(G.on){
+    if(e.key==="Escape"||e.key==="Enter"){e.preventDefault();closeGame();return;}
+    if(e.key==="r"||e.key==="R"){e.preventDefault();resetArm();}
+    return;
+  }
+  if(!view)return;
+  if(e.key==="Enter")post(view==="tomato"?"accept":"back-to-work");
+  else if(e.key==="Escape"&&view==="tomato")post("snooze");
+});
+
+/* ---- the break menu -------------------------------------------------------
+   Two tools, on their own layer above the stage for the same reason the game
+   is: the stage is torn down and rebuilt on every phase change, and a break
+   flips to break-over on its own clock while you are looking at it. A panel
+   built inside #stage would vanish mid-sentence.
+
+   Nothing here can end a break, count a pomodoro or write a row. Every action
+   leaves as a short message to Swift, which turns it into a fixed-name file;
+   the watcher is the only thing that turns a file into a running process. The
+   page never sees a playlist URI — it is sent names and answers with an
+   index — and the only free text it can produce is the note you type. */
+const M={on:false,view:"home",vhold:0,volAt:0,volT:null,plKey:"",
+  icon:"",noteBusy:false,noteAt:0};
+const NDRAFT="tt-break-note";
+
+function mpost(a){
+  try{window.webkit.messageHandlers.menu.postMessage(a);}
+  catch(e){console.log("menu:",a);}
+}
+function menuAllowed(){
+  return !!st&&typeof st.menu==="string"&&st.menu!=="-"&&
+         (view==="break"||view==="breakover")&&!busy;
+}
+function menuShow(which){
+  if(M.view==="sp"&&which!=="sp")mpost("sp.close");
+  for(const id of ["mhome","msp","mnote"])$(id).classList.remove("on");
+  $(which==="sp"?"msp":which==="note"?"mnote":"mhome").classList.add("on");
+  M.view=which;
+  if(which==="sp"){M.plKey="";M.icon="";mpost("sp.open");paintSpotify();}
+  if(which==="note"){
+    noteSync();noteIdle();
+    // After the panel has finished appearing, or the caret lands mid-fade.
+    setTimeout(()=>{if(M.on&&M.view==="note")$("ntext").focus();},80);
+  }
+}
+function menuOpen(){
+  if(M.on||!menuAllowed())return;
+  closeGame();                     // one thing on screen at a time
+  M.on=true;
+  document.body.classList.add("menuing");
+  const m=$("menu");
+  m.classList.add("on");
+  // Forcing layout here rather than waiting a frame: a transition needs a
+  // start point that has actually been laid out, and requestAnimationFrame is
+  // not guaranteed to run promptly — or at all — in a WebView that is not
+  // being drawn. Reading offsetWidth is.
+  void m.offsetWidth;
+  m.classList.add("up");
+  menuShow("home");
+}
+function menuClose(instant){
+  if(!M.on)return;
+  M.on=false;
+  if(M.view==="sp")mpost("sp.close");
+  noteDraftSave();
+  M.view="home";
+  document.body.classList.remove("menuing");
+  const m=$("menu");m.classList.remove("up");
+  if(instant)m.classList.remove("on");
+  else setTimeout(()=>{if(!M.on)m.classList.remove("on");},200);
+}
+function menuBack(){ if(M.view==="home")menuClose(); else menuShow("home"); }
+
+/* ---- Spotify ---- */
+// A playlist has no artwork here: the desktop app's scripting dictionary
+// hands out the current track, not your library, and fetching a cover would
+// mean this page touching the network. So the tile is derived from the name
+// instead — stable, distinct, and honest about being a stand-in.
+function plHue(s){
+  let h=0;
+  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;
+  return h;
+}
+function plTile(name){
+  const h=plHue(name);
+  return "linear-gradient(145deg,hsl("+h+",40%,33%),hsl("+((h+40)%360)+",36%,17%))";
+}
+function paintPlaylists(){
+  const pl=(st&&st.pl)||[];
+  const key=JSON.stringify(pl);
+  // Rebuilding twenty identical rows twice a second would jump the scroll
+  // position out from under a click.
+  if(key===M.plKey)return;
+  M.plKey=key;
+  const list=$("pllist");
+  list.innerHTML="";
+  let work=null,n=0;
+  pl.forEach((p,i)=>{
+    if(p.w){work=p;return;}       // sacred to work sessions; not break music
+    n++;
+    const row=document.createElement("div");
+    row.className="pl";
+    row.dataset.pl=String(i);
+    const sw=document.createElement("span");
+    sw.className="sw";
+    sw.style.background=plTile(p.n);
+    sw.innerHTML='<svg><use href="#i-list"/></svg>'+
+      '<span class="go"><svg><use href="#i-play"/></svg></span>';
+    const nm=document.createElement("span");
+    nm.className="nm";
+    nm.textContent=p.n;           // never innerHTML: this is your own text
+    row.appendChild(sw);row.appendChild(nm);
+    list.appendChild(row);
+  });
+  if(!n){
+    const e=document.createElement("div");
+    e.className="plempty";
+    e.textContent=work
+      ? "Only the work playlist is set up. Add break playlists in “time settings”."
+      : "No playlists yet — add them in “time settings”.";
+    list.appendChild(e);
+  }
+  $("plcount").textContent=n?String(n):"";
+  const w=$("plwork");
+  w.innerHTML="";
+  if(work){
+    const tag=document.createElement("span");
+    tag.className="tag";tag.textContent="work";
+    const b=document.createElement("b");b.textContent=work.n;
+    const tail=document.createElement("span");
+    tail.textContent="comes back when you do";
+    w.appendChild(tag);w.appendChild(b);w.appendChild(tail);
+  }
+  w.style.display=work?"":"none";
+}
+function paintSpotify(){
+  if(!M.on||M.view!=="sp")return;
+  const sp=st&&st.sp,t=$("nptrack"),a=$("npartist");
+  let dim=true,playing=false,live=false;
+  if(!sp){
+    // The agent is a separate process and takes a moment to be launched and
+    // answer. Saying so beats saying something wrong for that moment.
+    t.textContent="Connecting…";
+    a.textContent="";
+  }else if(sp.state==="off"){
+    t.textContent="Spotify isn’t open";
+    a.textContent="Choose a playlist to start it";
+  }else if(sp.state==="unreachable"){
+    t.textContent="Can’t reach Spotify";
+    a.textContent="Allow it under Privacy & Security › Automation";
+  }else if(!sp.track){
+    live=true;playing=sp.state==="playing";
+    t.textContent=playing?"Playing":"Nothing queued";
+    a.textContent="";
+  }else{
+    live=true;dim=false;playing=sp.state==="playing";
+    t.textContent=sp.track;
+    a.textContent=sp.artist||"";
+  }
+  t.className=dim?"dim":"";
+  $("np").classList.toggle("playing",playing);
+  const want=playing?"i-pause":"i-play";
+  if(want!==M.icon){M.icon=want;$("splayi").innerHTML='<use href="#'+want+'"/>';}
+  for(const id of ["sprev","splay","snext"])$(id).disabled=!live;
+  // A slider being dragged is the truth; the poll is a second behind it.
+  if(sp&&Date.now()>M.vhold){
+    const v=Math.max(0,Math.min(100,sp.vol|0));
+    $("vol").value=String(v);
+    $("vol").style.setProperty("--vf",v+"%");
+  }
+  paintPlaylists();
+}
+function volSend(v){
+  M.volAt=Date.now();
+  mpost("sp.vol."+v);
+}
+
+/* ---- capture ---- */
+// The draft outlives the overlay on purpose: this process exits the moment
+// the break ends, and losing a half-typed idea to a timer would be the exact
+// opposite of what the box is for.
+function noteDraftLoad(){
+  try{const d=localStorage.getItem(NDRAFT);if(d)$("ntext").value=d;}catch(e){}
+}
+function noteDraftSave(){
+  try{localStorage.setItem(NDRAFT,$("ntext").value);}catch(e){}
+}
+function noteStatus(text,cls,spin){
+  const n=$("nstat");
+  n.className=cls||"";
+  n.textContent="";
+  if(spin){
+    const d=document.createElement("span");d.className="sp";
+    n.appendChild(d);
+  }
+  n.appendChild(document.createTextNode(text));
+}
+function noteSync(){
+  $("nsave").disabled=M.noteBusy||!$("ntext").value.trim();
+}
+// The resting state of the status line is the shortcut, not emptiness — the
+// box is a text field on a screen with no menu bar to discover it from.
+function noteIdle(){ noteStatus("⌘↵ saves",""); }
+function noteSave(){
+  const txt=$("ntext").value.trim();
+  if(!txt||M.noteBusy)return;
+  M.noteBusy=true;M.noteAt=Date.now();
+  noteSync();
+  noteStatus("Saving…","",true);
+  mpost("note.save."+txt);
+}
+function paintNote(){
+  if(!M.on||M.view!=="note")return;
+  const list=(st&&st.remlist)||"Pause Notes";
+  const l=$("nlist");
+  l.textContent="";
+  l.appendChild(document.createTextNode("Goes to "));
+  const b=document.createElement("b");b.textContent=list;
+  l.appendChild(b);
+  if(!M.noteBusy)return;
+  const r=st&&st.rem;
+  if(r&&r.status){
+    M.noteBusy=false;
+    if(r.status==="ok"){
+      $("ntext").value="";noteDraftSave();
+      noteStatus("Saved to "+(r.detail||list),"ok");
+      setTimeout(()=>{if(!M.noteBusy&&M.view==="note")noteIdle();},3000);
+    }else if(r.status==="denied"){
+      noteStatus("Reminders access refused — allow it under Privacy & Security","bad");
+    }else{
+      noteStatus("Couldn’t save"+(r.detail?" — "+r.detail:""),"bad");
+    }
+    // Consumed: the verdict must not still be sitting there next break.
+    mpost("note.clear");
+    noteSync();
+  }else if(Date.now()-M.noteAt>45000){
+    // The helper never answered. Say so rather than spin for ever — the draft
+    // is still in the box, which is the part that matters.
+    M.noteBusy=false;
+    noteStatus("No answer from Reminders — the note is still here","bad");
+    noteSync();
+  }
+}
+
+/* ---- wiring ---- */
+$("burger").addEventListener("click",()=>{M.on?menuClose():menuOpen();});
+$("menu").addEventListener("click",e=>{
+  const go=e.target.closest("[data-go]");
+  if(go){ go.dataset.go==="home"?menuBack():menuShow(go.dataset.go); return; }
+  const pl=e.target.closest("[data-pl]");
+  if(pl){ mpost("sp.play."+pl.dataset.pl); return; }
+});
+$("sprev").addEventListener("click",()=>mpost("sp.prev"));
+$("snext").addEventListener("click",()=>mpost("sp.next"));
+$("splay").addEventListener("click",()=>{
+  // Flip the icon now and let the next poll confirm it: a transport button
+  // that waits a beat before acknowledging feels broken even when it worked.
+  M.icon=M.icon==="i-play"?"i-pause":"i-play";
+  $("splayi").innerHTML='<use href="#'+M.icon+'"/>';
+  $("np").classList.toggle("playing",M.icon==="i-pause");
+  mpost("sp.playpause");
+});
+$("vol").addEventListener("input",()=>{
+  const v=Math.max(0,Math.min(100,parseInt($("vol").value,10)||0));
+  $("vol").style.setProperty("--vf",v+"%");
+  M.vhold=Date.now()+900;
+  // Rate-limited, with a trailing send so the value you let go on is the one
+  // that lands — a slider dragged across its range is a hundred events.
+  if(M.volT){clearTimeout(M.volT);M.volT=null;}
+  if(Date.now()-M.volAt>140)volSend(v);
+  else M.volT=setTimeout(()=>{M.volT=null;volSend(v);},160);
+});
+$("ntext").addEventListener("input",()=>{noteSync();noteDraftSave();});
+$("nsave").addEventListener("click",noteSave);
+noteDraftLoad();
+
+/* ---- easter egg: tomato clicker -------------------------------------------
+   The tomato on the pause screen is clickable, and nothing says so — finding
+   it is the point. The game runs on its own layer above the stage, so a
+   break -> break-over change underneath it is invisible; the break's own
+   clock stays in the corner and goes red on overrun, so playing never hides
+   the thing the screen is actually for. Esc (or Enter) drops back to the
+   pause screen, from where Enter still ends the break as always.
+
+   Progress is kept in localStorage where the WebView allows it; where it
+   doesn't, a garden simply lasts one break. No network, no libraries. */
+const SHOP=[
+  {k:"seed", e:"🌱", n:"Seedling",           c:15,      ps:.1},
+  {k:"knife",e:"🔪", n:"Sharper knife",      c:60,      cl:1, m:1.4},
+  {k:"pot",  e:"🪴", n:"Windowsill pot",     c:150,     ps:.7},
+  {k:"hand", e:"🧑‍🌾",n:"Gardener",           c:900,     ps:3.4},
+  {k:"trac", e:"🚜", n:"Tractor",            c:5500,    ps:16},
+  {k:"can",  e:"🥫", n:"Cannery",            c:32000,   ps:70},
+  {k:"lab",  e:"🧪", n:"Splice lab",         c:180000,  ps:340},
+  {k:"orb",  e:"🚀", n:"Orbital greenhouse", c:1100000, ps:1800}
+];
+const SAVE="tt-tomato-clicker";
+const G={on:false,n:0,earned:0,ps:0,click:1,own:{},parts:[],
+  raf:0,last:0,s:0,sv:0,gold:null,goldAt:0,saveAt:0,shopAt:0,
+  away:0,awaySecs:0,day:null,
+  at:Date.now()/1000};   // wall clock through which growth has been paid
+let popT=null;
+
+/* ---- daily leaderboard -----------------------------------------------------
+   One garden per calendar day, so a day's score is what that day's pomodoros
+   grew — not the pile of upgrades a month of playing bought. The boundary is
+   local midnight, the same "today" the dashboard itself uses. earned (never
+   spent, only ever up) is what gets ranked; n dips every time the shop is
+   used and would make a stingy day look worse than a spendthrift one. */
+const HSAVE="tt-tomato-history";
+let HIST={},ALLBEST=0;
+function dayKey(t){
+  const d=new Date(t*1000);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")
+    +"-"+String(d.getDate()).padStart(2,"0");
+}
+function recalcBest(){let m=0;for(const k in HIST)if(HIST[k]>m)m=HIST[k];ALLBEST=m;}
+function hload(){
+  try{HIST=JSON.parse(localStorage.getItem(HSAVE)||"{}")||{};}catch(e){HIST={};}
+  if(typeof HIST!=="object"||Array.isArray(HIST))HIST={};
+  recalcBest();
+}
+function hsave(){try{localStorage.setItem(HSAVE,JSON.stringify(HIST));}catch(e){}}
+
+// Files the outgoing day into the leaderboard (only if anything was actually
+// grown that day — a day never opened shouldn't show up as a zero) and
+// starts the garden over. Shared by the midnight rollover and the manual
+// reset button below, so "start today over" and "a new day started" do the
+// exact same thing.
+function rollDay(day){
+  if(G.earned>0){HIST[day]=Math.max(HIST[day]||0,Math.floor(G.earned));hsave();recalcBest();}
+  G.n=0;G.earned=0;G.own={};G.click=1;recalc();
+}
+
+// Growth is owed for elapsed time, not for frames drawn. Nothing of ours
+// runs while the game is shut or the overlay is gone — there is no page at
+// all during the work period — so every stretch is settled from the clock
+// the moment somebody asks: on load, and again whenever the game reopens.
+// Capped at 8h, echoing the watcher's own "sleep and long breaks are normal
+// life" guard, so a weekend off is not a windfall.
+//
+// It only ever pays for time inside an actual work/break cycle, never for a
+// gap where no cycle was running at all. st.cycleStart (Swift's f[2], the
+// seg the watcher was launched with) holds through every phase of one
+// continuous cycle, so clamping the start of the stretch to it is enough:
+// mid-cycle it's a no-op (G.at is already past it), and it only bites the
+// one time it matters, when a stale save predates the cycle now on screen.
+function accrue(){
+  const now=Date.now()/1000;
+  // Roll the day *before* paying out this stretch, so a gap that spans
+  // midnight banks yesterday's true total first and only the fresh garden
+  // grows from here — never the other way round.
+  const k=dayKey(now);
+  if(G.day&&G.day!==k)rollDay(G.day);
+  G.day=k;
+  const from=(st&&st.cycleStart)?Math.max(G.at,st.cycleStart):G.at;
+  const secs=Math.min(28800,Math.max(0,now-from));
+  G.at=now;
+  if(!G.ps||!secs)return 0;
+  const grew=G.ps*secs;
+  G.n+=grew;G.earned+=grew;
+  return grew;
+}
+
+function gload(){
+  hload();
+  let r=null;
+  try{r=JSON.parse(localStorage.getItem(SAVE)||"null");}catch(e){}
+  if(!r||typeof r.n!=="number"||!isFinite(r.n)){
+    G.day=dayKey(Date.now()/1000);      // fresh install: today is day one
+    return;
+  }
+  G.n=r.n;G.earned=r.earned||r.n;G.own=r.own||{};
+  G.day=r.day||dayKey(r.at||Date.now()/1000);
+  recalc();
+  // A save with no timestamp predates all this and owes nothing; reading its
+  // missing field as epoch zero would pay out the entire cap.
+  G.at=r.at||Date.now()/1000;
+  // Settling this gap is deferred to the first window.ttSetState() below —
+  // only Swift knows where the current cycle started, and accrue() needs
+  // that to know how much of the gap actually counts.
+}
+function gsave(){try{
+  localStorage.setItem(SAVE,JSON.stringify(
+    {n:G.n,earned:G.earned,own:G.own,at:G.at,day:G.day}));
+}catch(e){}}
+
+// Manual version of the same rollover: banks today's run as today's score
+// (only bettering it, never losing it) and hands back a clean garden without
+// waiting for midnight.
+function manualReset(){
+  rollDay(G.day);
+  gsave();
+  shopSync();paintGame();
+}
+
+// Thin spaces below a million, then a suffix — the number has to stay one
+// glance wide next to a 9vh font.
+function num(v){
+  v=Math.floor(v);
+  if(v<1e6)return String(v).replace(/\B(?=(\d{3})+$)/g,"\u2009");
+  for(const u of [[1e12,"T"],[1e9,"B"],[1e6,"M"]])
+    if(v>=u[0])return (v/u[0]).toFixed(v/u[0]<10?2:1)+u[1];
+  return String(v);
+}
+function cost(it){return Math.ceil(it.c*Math.pow(it.m||1.15,G.own[it.k]||0));}
+function recalc(){
+  let ps=0,cl=1;
+  for(const it of SHOP){const q=G.own[it.k]||0;if(!q)continue;
+    if(it.ps)ps+=it.ps*q;if(it.cl)cl+=it.cl*q;}
+  G.ps=ps;G.click=cl+ps*.05;      // clicking keeps up a little as it scales
+}
+
+// The break, and only a break with time left on it. Once it runs over the
+// screen is a nudge again, not a game: the toy puts itself away.
+function playable(){
+  return !!st&&st.phase==="BREAK"&&Date.now()/1000<st.target;
+}
+
+/* ---- flourishes ----------------------------------------------------------- */
+function splash(cx,cy,n,big){
+  for(let i=0;i<n;i++){
+    if(G.parts.length>190)return;
+    const d=document.createElement("div");
+    if(Math.random()<.32)
+      d.style.cssText="width:.9vh;height:1.5vh;border-radius:50%;background:#f3d9a4";
+    else{const s=(.9+Math.random()*1.7)*(big?1.5:1);
+      d.style.cssText="width:"+s+"vh;height:"+s+"vh;border-radius:50%;background:"
+        +(Math.random()<.5?"#e5484d":"#b8262b");}
+    d.className="particle";d.style.left="0";d.style.top="0";
+    $("game").appendChild(d);
+    const a=Math.random()*Math.PI*2,v=(big?380:150)+Math.random()*(big?760:300);
+    G.parts.push({el:d,x:cx,y:cy,vx:Math.cos(a)*v,vy:Math.sin(a)*v-(big?420:230),
+      r:Math.random()*360,vr:(Math.random()-.5)*680,t:0,life:big?1.25:.8});
+  }
+}
+function ring(x,y,vh){
+  const d=document.createElement("div");d.className="ring";
+  d.style.cssText+=";left:"+x+"px;top:"+y+"px;width:"+vh+"vh;height:"+vh+"vh";
+  d.addEventListener("animationend",()=>d.remove());
+  $("game").appendChild(d);
+}
+function floatText(txt,x,y,vh,col){
+  const d=document.createElement("div");d.className="float";d.textContent=txt;
+  d.style.cssText+=";left:"+x+"px;top:"+y+"px;font-size:"+vh+"vh;color:"+col;
+  d.addEventListener("animationend",()=>d.remove());
+  $("game").appendChild(d);
+}
+function stepParts(dt){
+  for(let i=G.parts.length-1;i>=0;i--){
+    const p=G.parts[i];p.t+=dt;
+    p.vy+=2500*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.r+=p.vr*dt;
+    p.el.style.transform="translate("+p.x.toFixed(1)+"px,"+p.y.toFixed(1)
+      +"px) rotate("+p.r.toFixed(0)+"deg)";
+    p.el.style.opacity=Math.max(0,1-p.t/p.life).toFixed(2);
+    if(p.t>=p.life){p.el.remove();G.parts.splice(i,1);}
+  }
+}
+
+/* ---- the click ------------------------------------------------------------ */
+function gclick(ev){
+  const v=G.click;G.n+=v;G.earned+=v;
+  G.sv-=3.4;                                   // kick the squash spring
+  const r=$("gtom").getBoundingClientRect();
+  const x=ev&&ev.clientX!==undefined?ev.clientX:r.left+r.width/2;
+  const y=ev&&ev.clientY!==undefined?ev.clientY:r.top+r.height/2;
+  ring(x,y,16);floatText("+"+num(v),x,y,3.2,"#fff");splash(x,y,7,false);
+  const sc=$("score");sc.classList.add("pop");
+  clearTimeout(popT);popT=setTimeout(()=>sc.classList.remove("pop"),90);
+}
+
+/* ---- golden tomato: drifts past now and then, worth a lot ------------------ */
+function goldStep(dt,ts){
+  const now=ts/1000;
+  if(!G.gold){
+    if(now<G.goldAt)return;
+    const d=document.createElement("div");d.className="gold";d.textContent="🍅";
+    d.addEventListener("click",goldHit);
+    $("game").appendChild(d);
+    const left=Math.random()<.5,h=innerHeight;
+    const w=$("gwrap").getBoundingClientRect().width;
+    G.gold={el:d,t:0,life:11,x:left?-w*.12:w*.12+w,y:h*(.16+Math.random()*.58),
+      vx:(left?1:-1)*(w*1.24)/11,amp:h*.06,ph:Math.random()*6};
+    return;
+  }
+  const g=G.gold;g.t+=dt;g.x+=g.vx*dt;
+  if(g.t>=g.life){g.el.remove();G.gold=null;G.goldAt=now+70+Math.random()*70;return;}
+  const y=g.y+Math.sin(g.t*1.5+g.ph)*g.amp;
+  g.el.style.transform="translate("+g.x.toFixed(1)+"px,"+y.toFixed(1)+"px) rotate("
+    +(Math.sin(g.t*2.2)*12).toFixed(1)+"deg)";
+  g.el.style.opacity=Math.min(1,g.t/.6,(g.life-g.t)/.9).toFixed(2);
+}
+function goldHit(){
+  if(!G.gold)return;
+  const g=G.gold,r=g.el.getBoundingClientRect();
+  const x=r.left+r.width/2,y=r.top+r.height/2;
+  const rew=Math.max(25*G.click,G.ps*30,25);
+  G.n+=rew;G.earned+=rew;
+  splash(x,y,34,true);ring(x,y,44);
+  floatText("juicy  +"+num(rew),x,y,5.2,"#ffcf72");
+  g.el.remove();G.gold=null;G.goldAt=performance.now()/1000+70+Math.random()*70;
+  G.sv-=1.6;gsave();
+}
+
+/* ---- shop ----------------------------------------------------------------- */
+function shopBuild(){
+  const box=$("shop");box.innerHTML="";
+  for(const it of SHOP){
+    const d=document.createElement("div");d.className="item";
+    d.innerHTML='<div class="e"></div><div class="b"><div class="n"></div>'
+      +'<div class="c"></div></div><div class="q"></div>';
+    d.querySelector(".e").textContent=it.e;
+    d.querySelector(".n").textContent=it.n;
+    d.addEventListener("click",()=>buy(it));
+    d.addEventListener("animationend",()=>d.classList.remove("flash","new"));
+    d.style.display="none";it.el=d;box.appendChild(d);
+  }
+}
+function shopSync(){
+  for(const it of SHOP){
+    const q=G.own[it.k]||0,c=cost(it),el=it.el;
+    // A thing only shows up once it's within reach, so the panel starts as
+    // one line and grows with the garden.
+    if(el.style.display==="none"){
+      if(it!==SHOP[0]&&G.earned<it.c*.6&&!q)continue;
+      el.style.display="";el.classList.add("new");
+    }
+    const can=G.n>=c;
+    if(can!==el.classList.contains("can"))el.classList.toggle("can",can);
+    const ct=num(c)+(it.ps?"  ·  "+it.ps+"/s":"  ·  +"+it.cl+" per click");
+    if(el._c!==ct){el._c=ct;el.querySelector(".c").textContent=ct;}
+    const qt=q?String(q):"";
+    if(el._q!==qt){el._q=qt;el.querySelector(".q").textContent=qt;}
+  }
+}
+function buy(it){
+  const c=cost(it);if(G.n<c)return;
+  G.n-=c;G.own[it.k]=(G.own[it.k]||0)+1;recalc();
+  const el=it.el,r=el.getBoundingClientRect();
+  el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash");
+  splash(r.left+r.width/2,r.top+r.height/2,8,false);
+  shopSync();gsave();
+}
+
+/* ---- scoreboard ----------------------------------------------------------- */
+function paintGame(){
+  $("score").textContent=num(G.n);
+  $("rate").textContent=(G.ps?G.ps.toFixed(1):"0")+" per second";
+  const today=Math.max(HIST[G.day]||0,Math.floor(G.earned));
+  $("best").textContent="today "+num(today)+"  ·  best day "+num(Math.max(ALLBEST,today));
+  $("glife").textContent=G.earned>=10?num(G.earned)+" grown in all":"";
+  // No overrun branch: the game closes itself the moment the break is over.
+  $("gclock").textContent=st&&st.phase==="BREAK"
+    ? mmss(Math.max(0,st.target-Date.now()/1000))+" of break left" : "";
+}
+
+/* ---- loop / open / close --------------------------------------------------- */
+// display:none cancels a running CSS animation *without* firing animationend,
+// so every node and class that cleans itself up that way would be stranded —
+// and then replay from the top the next time the layer is shown. Closing
+// therefore clears the transient state itself rather than trusting the
+// animations to finish.
+function gclear(){
+  for(const p of G.parts)p.el.remove();
+  G.parts.length=0;
+  for(const d of $("game").querySelectorAll(".float,.ring,.particle"))d.remove();
+  for(const it of SHOP)it.el.classList.remove("flash","new");
+  clearTimeout(popT);$("score").classList.remove("pop");
+  G.s=0;G.sv=0;
+  $("gtom").style.transform="";$("glow").style.opacity="";
+  $("away").classList.remove("on");
+  resetCancel();
+}
+
+/* ---- reset: press once to arm, again (or the shortcut) within 3s to fire -- */
+let resetT=null;
+function resetCancel(){
+  clearTimeout(resetT);resetT=null;
+  $("greset").classList.remove("confirm");
+  $("greset-label").textContent="reset";
+}
+function resetArm(){
+  if($("greset").classList.contains("confirm")){
+    resetCancel();manualReset();
+    return;
+  }
+  $("greset").classList.add("confirm");
+  $("greset-label").textContent="sure?";
+  resetT=setTimeout(resetCancel,3000);
+}
+function loop(ts){
+  const dt=Math.min(.05,Math.max(0,(ts-G.last)/1000));  // animation step
+  G.last=ts;
+  if(G.on&&!playable())closeGame();   // the break ran out mid-frame
+  if(G.on){
+    accrue();                         // by the clock, so a stall costs nothing
+    // Squash spring: a click pushes it in, and it comes back with a little
+    // overshoot. Volume is roughly kept, so it widens as it flattens.
+    G.sv+=(-300*G.s-21*G.sv)*dt;G.s+=G.sv*dt;
+    const sc=1+G.s*.9,q=-G.s*.3;
+    $("gtom").style.transform="scale("+(sc*(1+q)).toFixed(4)+","
+      +(sc*(1-q)).toFixed(4)+")";
+    $("glow").style.opacity=(.18+Math.max(0,-G.s)*1.9).toFixed(3);
+    paintGame();
+    goldStep(dt,ts);
+    if(ts-G.shopAt>120){G.shopAt=ts;shopSync();}
+    if(ts-G.saveAt>5000){G.saveAt=ts;gsave();}
+  }
+  stepParts(dt);
+  G.raf=(G.on||G.parts.length)?requestAnimationFrame(loop):0;
+}
+function openGame(){
+  if(G.on||M.on||busy||!playable())return;
+  gclear();                       // in case a close was cut short by a reopen
+  G.on=true;document.body.classList.add("playing");
+  const g=$("game");g.classList.add("on");
+  requestAnimationFrame(()=>g.classList.add("up"));
+  recalc();
+  // Settle whatever grew while the game was shut before drawing a number.
+  const from=G.at;
+  const back=accrue();
+  const secs=G.at-from;
+  shopSync();paintGame();
+  G.last=performance.now();G.saveAt=G.last;
+  G.goldAt=G.last/1000+40+Math.random()*50;
+  // What it made without you, said once and then let be. A whole work period
+  // gone (G.away, set on load) reads differently from stepping out mid-break,
+  // and ducking out for a moment isn't worth remarking on at all.
+  const line=(G.away>=1&&G.awaySecs>=10)?"+"+num(G.away)+" while you worked"
+            :((back>=1&&secs>=10)?"+"+num(back)+" while you were away":"");
+  G.away=0;
+  if(line){
+    $("away").textContent=line;
+    $("away").classList.add("on");
+    setTimeout(()=>$("away").classList.remove("on"),6000);
+  }
+  if(!G.raf)G.raf=requestAnimationFrame(loop);
+}
+function closeGame(){
+  if(!G.on)return;
+  G.on=false;accrue();gsave();   // bank it, and stamp the save with now
+  document.body.classList.remove("playing");
+  const g=$("game");g.classList.remove("up");
+  if(G.gold){G.gold.el.remove();G.gold=null;}
+  // Clear at the end of the fade: invisible, and a reopen inside it wins.
+  setTimeout(()=>{if(!G.on){g.classList.remove("on");gclear();}},340);
+}
+gload();recalc();shopBuild();
+$("gtom").addEventListener("click",gclick);
+$("gback").addEventListener("click",closeGame);
+$("greset").addEventListener("click",resetArm);
+
+ticker=setInterval(paint,250);
+
+// Standalone visual check: tomato.html#demo=break
+//   #demo=menu / #demo=spotify / #demo=note open the break menu on top of a
+//   break, with a plausible library, so the panels can be looked at without a
+//   watcher, a Spotify or a granted permission anywhere in sight.
+(function(){
+  const m=/demo=(\w+)/.exec(location.hash);
+  if(!m)return;
+  const now=Math.floor(Date.now()/1000);
+  const menu={menu:"spotify,reminders",remlist:"Pause Notes",
+    sp:{state:"playing",vol:62,track:"Rye Rye",artist:"Sam Gendel"},
+    pl:[{n:"Deep Focus",w:true},{n:"Break café",w:false},
+        {n:"Norsk pop",w:false},{n:"Lo-fi kitchen",w:false},
+        {n:"Bangers only",w:false},{n:"Jazz for the walk",w:false},
+        {n:"Rain on a window",w:false},{n:"Toppliste 2026",w:false}]};
+  const demo={tomato:{phase:"WORK",target:now,completed:1,overrun:0,cycle:4,autosec:60},
+    break:{phase:"BREAK",target:now+300,completed:2,overrun:0,cycle:4,autosec:60},
+    breakover:{phase:"BREAK",target:now-95,completed:2,overrun:0,cycle:4,autosec:60}};
+  if(m[1]==="game"){window.ttSetState(demo.break);openGame();return;}
+  if(m[1]==="menu"||m[1]==="spotify"||m[1]==="note"){
+    window.ttSetState(Object.assign({},demo.break,menu));
+    menuOpen();
+    if(m[1]!=="menu")menuShow(m[1]==="spotify"?"sp":"note");
+    return;
+  }
+  if(demo[m[1]])window.ttSetState(demo[m[1]]);
+})();
+</script></body></html>

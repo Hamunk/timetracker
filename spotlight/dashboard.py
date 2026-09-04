@@ -1,0 +1,1619 @@
+#!/usr/bin/env python3
+"""TimeTracker live dashboard.
+
+Serves a small web page on 127.0.0.1 that polls the TSV files and re-renders,
+so totals stay correct while a timer is still running (the in-flight segment
+isn't in sessions.tsv yet, so it's added on the fly).
+
+The page can also fix a closed session (edit its times/category/notes) or
+delete it — because forgetting to stop the timer is the one mistake this tool
+can't prevent. The settings page additionally retires a category, by hiding it
+or deleting it. Those mutations (plus settings writes) are the *only* ones,
+they are POST-only, and they don't write anything themselves: they shell out
+to action.sh, which stays the single writer and holds the lock. Nothing here
+can start or stop a timer.
+
+Hardening, since this listens on a socket:
+  * binds 127.0.0.1 only, on an ephemeral port
+  * requires a random per-run token on every request
+  * validates the Host header (blocks DNS-rebinding from a web page)
+  * mutations are POST-only and additionally require the token in a custom
+    header, a JSON content type, and a matching Origin — a cross-origin page
+    can send none of those without a preflight, and no preflight is answered
+  * no directory serving, no user input reaching the filesystem
+  * exits on its own after a period with no polls, so nothing lingers
+"""
+import datetime
+import http.server
+import json
+import os
+import secrets
+import socketserver
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+
+DATA_DIR = os.environ.get("TIMETRACK_DIR") or os.path.expanduser("~/.timetrack")
+SESS_FILE = os.path.join(DATA_DIR, "sessions.tsv")
+STATE_FILE = os.path.join(DATA_DIR, "state")
+CAT_FILE = os.path.join(DATA_DIR, "categories.tsv")
+HANDOFF_FILE = os.path.join(DATA_DIR, ".dashboard")
+POMO_FILE = os.path.join(DATA_DIR, "pomodoro")
+# The break menu's two lists. Read here, written only by action.sh.
+PLAYLIST_FILE = os.path.join(DATA_DIR, "spotify-playlists.tsv")
+REMLIST_FILE = os.path.join(DATA_DIR, "reminders-list")
+# Which calendar the log gets painted onto, and the list of ones it could be.
+# The list is a dump the helper refreshes; this server never asks EventKit
+# anything itself, because it has no calendar permission and should not.
+PAINTCAL_FILE = os.path.join(DATA_DIR, "paint-calendar")
+PAINTLIST_FILE = os.path.join(DATA_DIR, ".paint-calendars.tsv")
+PAINT_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "paint-calendar.sh")
+# All writes go through action.sh, which lives next to this file.
+ACTION_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "action.sh")
+# Retiring a category also has to rebuild the launcher bundles, the same way
+# newcat.sh does after adding one. It takes no arguments, ever.
+SYNC_APPS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "sync-apps.sh")
+# The settings defaults/ranges table lives in settings.sh and nowhere else;
+# this server reads it by sourcing the helper, never by duplicating the table.
+SETTINGS_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "settings.sh")
+
+MAX_BODY = 8192  # a mutation request is a few hundred bytes; cap it well below
+
+IDLE_TIMEOUT = 600  # seconds without a request before the server exits
+POLL_MS = 2000
+
+_last_request = time.time()
+
+
+# --------------------------------------------------------------------------
+# data
+# --------------------------------------------------------------------------
+
+def fmtdur(s):
+    s = int(s)
+    sign = "-" if s < 0 else ""
+    s = abs(s)
+    if s < 60:
+        return f"{sign}{s}s"
+    m, h = s // 60, s // 3600
+    m %= 60
+    if h:
+        return f"{sign}{h}h {m:02d}m"
+    return f"{sign}{m}m"
+
+
+def read_categories():
+    """key -> (name, keywords, hidden). Display only; the log stores keys.
+
+    A row written before the hidden column existed has four fields, which
+    means not hidden — the same reading every other script here uses.
+    """
+    cats = {}
+    try:
+        with open(CAT_FILE, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                p = line.rstrip("\n").split("\t")
+                if i == 0 and p and p[0] == "key":
+                    continue
+                if len(p) >= 4 and p[0]:
+                    cats[p[0]] = (p[1], p[2], len(p) > 4 and p[4] == "1")
+    except OSError:
+        pass
+    return cats
+
+
+def read_playlists():
+    """The break menu's Spotify rows, in file order.
+
+    A row is {uri, name, work}. Anything that isn't a spotify: URI and a name
+    is dropped, which disposes of the header line without counting lines —
+    the same reading the overlay does.
+    """
+    out = []
+    try:
+        with open(PLAYLIST_FILE, encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t")
+                if len(p) < 2 or not p[0].startswith("spotify:") or not p[1]:
+                    continue
+                out.append({"uri": p[0], "name": p[1],
+                            "work": len(p) > 2 and p[2] == "work"})
+    except OSError:
+        pass
+    return out
+
+
+def read_reminders_list():
+    """Which Reminders list a break note goes to. The default is the helper's."""
+    try:
+        with open(REMLIST_FILE, encoding="utf-8") as f:
+            name = f.readline().strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    return "Pause Notes"
+
+
+def read_paint_calendar():
+    """The chosen calendar's title, or "" when none has been picked."""
+    try:
+        with open(PAINTCAL_FILE, encoding="utf-8") as f:
+            return f.readline().strip()
+    except OSError:
+        return ""
+
+
+def read_paint_choices():
+    """Calendars the helper last reported as writable: [{title, source}].
+
+    Empty until "time calendar" has run once — this server cannot ask
+    EventKit, and should not: the permission belongs to the helper bundle.
+    """
+    out = []
+    try:
+        with open(PAINTLIST_FILE, encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t")
+                if len(p) >= 2 and p[0] == "CAL" and p[1]:
+                    out.append({"title": p[1],
+                                "source": p[2] if len(p) > 2 else ""})
+    except OSError:
+        pass
+    return out
+
+
+def label_for(key, cats):
+    name = cats.get(key, ("", "", False))[0]
+    return f"{key}: {name}" if name else key
+
+
+def read_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            line = f.readline().rstrip("\n")
+    except OSError:
+        return None
+    if not line:
+        return None
+    parts = line.split("\t")
+    if len(parts) < 3:
+        return None
+    status, category, start = parts[0], parts[1], parts[2]
+    plan = parts[3] if len(parts) > 3 else ""
+    # RUNNING is the only live status; anything else is corrupt, not a timer.
+    if status != "RUNNING" or not category:
+        return None
+    try:
+        start = int(start)
+    except ValueError:
+        return None
+    return {"status": status, "category": category, "start": start,
+            "plan": plan}
+
+
+def parse_iso(value):
+    """Epoch for a logged timestamp, or None if it doesn't parse.
+
+    Only used to make a row editable; a row that fails here still displays.
+    """
+    try:
+        return int(datetime.datetime.strptime(
+            value, "%Y-%m-%dT%H:%M:%S%z").timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
+def read_sessions():
+    rows = []
+    try:
+        with open(SESS_FILE, encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i == 0:
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 4:
+                    continue
+                try:
+                    dur = int(parts[2])
+                except ValueError:
+                    continue
+                rows.append({
+                    "start": parts[0],
+                    "end": parts[1],
+                    "dur": dur,
+                    "category": parts[3],
+                    "note": parts[4] if len(parts) > 4 else "",
+                    # Rows logged before notes existed simply have fewer fields.
+                    "plan": parts[5] if len(parts) > 5 else "",
+                    "recap": parts[6] if len(parts) > 6 else "",
+                    # Empty = pomodoro mode was off for this row.
+                    "pomodoros": parts[7] if len(parts) > 7 else "",
+                    "overrun": parts[8] if len(parts) > 8 else "",
+                    "start_ep": parse_iso(parts[0]),
+                    "end_ep": parse_iso(parts[1]),
+                })
+    except OSError:
+        pass
+    return rows
+
+
+def read_pomodoro(state):
+    """The live pomodoro cycle, or None.
+
+    Only reported while it matches the running timer's key and segment —
+    a stale file from a killed watcher is not a live cycle.
+    """
+    if not state or state["status"] != "RUNNING":
+        return None
+    try:
+        with open(POMO_FILE, encoding="utf-8") as f:
+            parts = f.readline().rstrip("\n").split("\t")
+    except OSError:
+        return None
+    if len(parts) < 7 or parts[0] not in ("WORK", "BREAK"):
+        return None
+    try:
+        seg, target = int(parts[2]), int(parts[3])
+        completed, overrun = int(parts[4]), int(parts[5])
+    except ValueError:
+        return None
+    if parts[1] != state["category"] or seg != state["start"]:
+        return None
+    return {"phase": parts[0], "target": target,
+            "completed": completed, "overrun": overrun,
+            "cycle": setting_int("long_break_every", 4)}
+
+
+def setting_int(key, default):
+    """One numeric setting via settings.sh (the table's single home)."""
+    for s in read_settings():
+        if s["key"] == key:
+            try:
+                return int(s["value"])
+            except ValueError:
+                return default
+    return default
+
+
+def build_payload():
+    now = int(time.time())
+    today = datetime.date.today()
+    week_start = today - datetime.timedelta(days=today.weekday())
+
+    rows = read_sessions()
+    state = read_state()
+    cats = read_categories()
+
+    today_t, week_t, all_t = {}, {}, {}
+    for r in rows:
+        cat, dur = r["category"], r["dur"]
+        all_t[cat] = all_t.get(cat, 0) + dur
+        day_str = r["start"][:10]
+        try:
+            day = datetime.date.fromisoformat(day_str)
+        except ValueError:
+            continue
+        if day == today:
+            today_t[cat] = today_t.get(cat, 0) + dur
+        if day >= week_start:
+            week_t[cat] = week_t.get(cat, 0) + dur
+
+    # Fold the still-open segment into the totals so the page matches reality.
+    running = None
+    if state and state["status"] == "RUNNING":
+        elapsed = max(0, now - state["start"])
+        cat = state["category"]
+        today_t[cat] = today_t.get(cat, 0) + elapsed
+        week_t[cat] = week_t.get(cat, 0) + elapsed
+        all_t[cat] = all_t.get(cat, 0) + elapsed
+        running = {"category": cat, "elapsed": elapsed,
+                   "plan": state.get("plan", "")}
+
+    keys = sorted(set(all_t) | set(today_t), key=lambda c: -all_t.get(c, 0))
+    table = [{
+        "category": label_for(k, cats),
+        "key": k,
+        "today": today_t.get(k, 0),
+        "week": week_t.get(k, 0),
+        "all": all_t.get(k, 0),
+        "running": bool(running and running["category"] == k),
+    } for k in keys]
+
+    def decorate(r):
+        d = dict(r)
+        d["key"] = r["category"]          # identity; the log stores keys
+        d["category"] = label_for(r["category"], cats)
+        return d
+
+    # EDITED is a provenance mark, not a problem — a row you already fixed by
+    # hand shouldn't keep nagging from "needs attention".
+    flagged = [decorate(r) for r in rows
+               if r["note"] and r["note"] != "EDITED"][-25:]
+    # Sorted by start rather than by file order, so a row whose start time was
+    # corrected lands where it belongs instead of at the end of the log.
+    by_start = sorted(rows, key=lambda r: (r["start_ep"] is None, r["start_ep"] or 0))
+    recent = [decorate(r) for r in by_start[-25:]][::-1]
+
+    known = sorted(set(cats) | {r["category"] for r in rows})
+    categories = [{"key": k, "label": label_for(k, cats)} for k in known]
+
+    return {
+        "status": state["status"] if state else "IDLE",
+        "category": label_for(state["category"], cats) if state else None,
+        "running": running,
+        "pomodoro": read_pomodoro(state),
+        "table": table,
+        "totals": {
+            "today": sum(today_t.values()),
+            "week": sum(week_t.values()),
+            "all": sum(all_t.values()),
+        },
+        "recent": recent,
+        "flagged": flagged,
+        "categories": categories,
+        "editable": os.access(ACTION_SH, os.X_OK),
+        "generated": datetime.datetime.now().strftime("%H:%M:%S"),
+    }
+
+
+def build_categories():
+    """The settings page's category list — every key, and what it holds.
+
+    The counts come from the log rather than from categories.tsv, because the
+    only question worth answering before retiring a category is how many hours
+    are already filed under it. Keys that exist *only* in the log are listed
+    too, unactionable: that is where a deleted category's history goes, and
+    this is the one page that admits it.
+    """
+    cats = read_categories()
+    state = read_state()
+    running = state["category"] if state else None
+
+    counts, totals = {}, {}
+    for r in read_sessions():
+        k = r["category"]
+        counts[k] = counts.get(k, 0) + 1
+        totals[k] = totals.get(k, 0) + r["dur"]
+
+    out = []
+    for key in set(cats) | set(counts):
+        orphan = key not in cats
+        hidden = bool(cats.get(key, ("", "", False))[2])
+        out.append({
+            "key": key,
+            "label": label_for(key, cats),
+            "hidden": hidden,
+            "orphan": orphan,
+            "sessions": counts.get(key, 0),
+            "total": totals.get(key, 0),
+            "running": key == running,
+        })
+    # Live first, then the ones you can still act on, then the leftovers.
+    out.sort(key=lambda c: (not c["running"], c["orphan"], c["hidden"],
+                            c["key"]))
+    return out
+
+
+def read_settings():
+    """Current settings via settings.sh — the same logic tt_setting uses.
+
+    Returns a list of {key, value, default, min, max}; min/max are None for
+    the on/off setting. An empty list means the helper is missing or broken,
+    which the page reports instead of guessing at defaults here.
+    """
+    script = (
+        '. "$1" || exit 1\n'
+        'for k in $(tt_setting_keys); do\n'
+        '  tt_setting_spec "$k"\n'
+        '  printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \\\n'
+        '    "$k" "$(tt_setting "$k")" "$TT_DEF" "$TT_MIN" "$TT_MAX" "$TT_FRAC"\n'
+        'done\n'
+    )
+    try:
+        # The helper's path is passed as an argument, never interpolated.
+        proc = subprocess.run(["/bin/bash", "-c", script, "bash", SETTINGS_SH],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    def num(x):
+        """A bound as a number — some are fractional, so not just isdigit()."""
+        try:
+            v = float(x)
+        except ValueError:
+            return None
+        return int(v) if v == int(v) else v
+
+    out = []
+    for line in proc.stdout.splitlines():
+        p = line.split("\t")
+        if len(p) != 6 or not p[0]:
+            continue
+        frac = bool(p[5])
+        out.append({"key": p[0], "value": p[1], "default": p[2],
+                    "min": num(p[3]), "max": num(p[4]),
+                    "step": 0.1 if frac else 1})
+    return out
+
+
+# --------------------------------------------------------------------------
+# page
+# --------------------------------------------------------------------------
+
+# Shared between the dashboard page and the settings page, so the two look
+# like the same application.
+THEME_CSS = """
+:root{color-scheme:light dark;
+--bg:#fbfbfd;--fg:#1d1d1f;--mut:#6e6e73;--line:#e3e3e8;--card:#fff;
+--accent:#0a84ff;--live:#30a14e;--warn:#bf5700;}
+@media (prefers-color-scheme:dark){:root{
+--bg:#161618;--fg:#f2f2f7;--mut:#9a9aa0;--line:#2c2c30;--card:#1f1f22;
+--accent:#4da3ff;--live:#4ac26b;--warn:#ff9f45;}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px 20px 60px;background:var(--bg);color:var(--fg);
+font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,sans-serif}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:19px;margin:0 0 2px;letter-spacing:-.01em}
+.sub{color:var(--mut);font-size:13px;margin-bottom:22px}
+.sub a{color:var(--accent);text-decoration:none}
+.mut{color:var(--mut)}
+.btn{font:inherit;font-size:12px;padding:3px 8px;border-radius:7px;cursor:pointer;
+background:transparent;color:var(--accent);border:1px solid var(--line);margin-left:5px}
+.btn:hover{border-color:var(--accent)}
+.btn[disabled]{opacity:.4;cursor:default;color:var(--mut);border-color:var(--line)}
+.btn.danger{color:var(--warn)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.msg{display:none;position:fixed;z-index:20;top:14px;right:16px;
+max-width:min(520px,calc(100vw - 32px));
+border:1px solid var(--line);background:var(--card);border-radius:10px;
+padding:10px 14px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.22)}
+.msg.bad{border-color:var(--warn);color:var(--warn)}
+"""
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>TimeTracker</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>__CSS__
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:18px 20px;margin-bottom:18px;display:flex;align-items:center;gap:14px}
+.dot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--mut)}
+.dot.run{background:var(--live);animation:p 1.6s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.35}}
+.hero .who{font-weight:600;font-size:16px}
+.hero .st{color:var(--mut);font-size:13px}
+.hero .pomo{color:var(--mut);font-size:13px;margin-top:2px;
+font-variant-numeric:tabular-nums}
+.pomotag{font-size:11px}
+.clock{margin-left:auto;font-variant-numeric:tabular-nums;font-size:26px;
+font-weight:250;letter-spacing:-.02em}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 15px}
+.card .k{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.card .v{font-size:21px;font-weight:500;font-variant-numeric:tabular-nums;margin-top:3px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+margin:26px 0 9px;font-weight:600}
+.tw{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:500;color:var(--mut);font-size:11px;
+text-transform:uppercase;letter-spacing:.05em;padding:11px 12px;border-bottom:1px solid var(--line)}
+td{padding:10px 12px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+th.n{text-align:right}
+.live{color:var(--live);font-weight:600}
+.tag{display:inline-block;font-size:10px;padding:2px 6px;border-radius:5px;
+background:var(--warn);color:#fff;margin-left:7px;vertical-align:middle;letter-spacing:.03em}
+/* Six columns get cramped: pin the fixed-width ones and let the free-text
+   note columns take whatever is left. */
+.note{font-size:13px;color:var(--fg);opacity:.85;min-width:110px}
+td.when{white-space:nowrap;font-variant-numeric:tabular-nums}
+td.cat{min-width:120px}
+.edited{font-size:10px}
+#recent td.n{white-space:nowrap}
+.empty{padding:22px 15px;color:var(--mut);font-size:14px}
+footer{margin-top:30px;color:var(--mut);font-size:12px;text-align:center}
+/* editing */
+td.acts,th.acts{white-space:nowrap;text-align:right;width:1%;padding-left:4px}
+td.editcell{background:var(--bg);padding:14px 15px}
+.edit{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 12px}
+.edit label{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;
+text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+.edit label.wide{grid-column:span 3}
+/* font:inherit would drag the label's uppercase 11px/600 down into the field. */
+.edit input,.edit select{font:inherit;font-size:14px;font-weight:400;
+text-transform:none;letter-spacing:normal;padding:6px 8px;width:100%;
+color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:7px}
+.edit input:focus,.edit select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.editfoot{grid-column:span 3;display:flex;align-items:center;gap:2px;
+border-top:1px solid var(--line);padding-top:11px}
+.editfoot .spacer{flex:1}
+#e-dur{font-size:13px;font-variant-numeric:tabular-nums}
+@media (max-width:640px){.edit{grid-template-columns:1fr}
+.edit label.wide,.editfoot{grid-column:span 1}}
+</style></head><body><div class="wrap">
+<h1>TimeTracker</h1>
+<div class="sub">Live — updates while a timer runs. Sessions can be corrected below.
+· <a id="nav-settings" href="#">Settings</a></div>
+<div class="hero"><div class="dot" id="dot"></div>
+<div><div class="who" id="who">—</div><div class="st" id="st"></div>
+<div class="pomo" id="pomo" style="display:none"></div></div>
+<div class="clock" id="clock"></div></div>
+<div class="msg" id="msg"></div>
+<div class="cards">
+<div class="card"><div class="k">Today</div><div class="v" id="t-today">—</div></div>
+<div class="card"><div class="k">This week</div><div class="v" id="t-week">—</div></div>
+<div class="card"><div class="k">All time</div><div class="v" id="t-all">—</div></div>
+</div>
+<h2>By category</h2>
+<div class="tw"><table><thead><tr><th>Category</th>
+<th class="n">Today</th><th class="n">Week</th><th class="n">All time</th>
+</tr></thead><tbody id="rows"></tbody></table></div>
+<h2>Recent sessions</h2>
+<div class="tw"><table><thead><tr><th>Start</th><th>Category</th>
+<th class="n">Duration</th><th>Planned</th><th>Actually did</th><th class="acts"></th>
+</tr></thead><tbody id="recent"></tbody></table></div>
+<div id="flagwrap" style="display:none">
+<h2>Needs attention</h2>
+<div class="tw"><table><thead><tr><th>Start</th><th>Category</th>
+<th class="n">Duration</th><th>Note</th><th class="acts"></th>
+</tr></thead><tbody id="flagged"></tbody></table></div></div>
+<footer id="foot"></footer>
+</div><script>
+const TOKEN=new URLSearchParams(location.search).get("t")||"";
+const $=i=>document.getElementById(i);
+$("nav-settings").href="/settings?t="+encodeURIComponent(TOKEN);
+let tick=null,elapsed=0,POMO=null;
+// Rows currently on screen, addressed by a throwaway id the buttons carry.
+let LAST=null,ROWS={},nrow=0,editing=null,msgTimer=null;
+function dur(s){const g=s<0?"-":"";s=Math.abs(s|0);
+if(s<60)return g+s+"s";const h=(s/3600)|0,m=((s%3600)/60)|0;
+return h?g+h+"h "+String(m).padStart(2,"0")+"m":g+m+"m";}
+function clock(s){const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
+return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0")+":"+String(x).padStart(2,"0");}
+function mmss(s){s=Math.max(0,s|0);
+return String((s/60)|0).padStart(2,"0")+":"+String(s%60).padStart(2,"0");}
+// Live pomodoro line in the hero: phase, ticking countdown, cycle dots,
+// accumulated break overrun. Recomputed from the wall clock each second.
+function pomoLine(){
+  const el=$("pomo");
+  if(!POMO){el.style.display="none";return;}
+  const now=Math.floor(Date.now()/1000),remain=POMO.target-now;
+  const cyc=Math.max(1,POMO.cycle||4),filled=POMO.completed%cyc;
+  let s;
+  if(POMO.phase==="WORK")
+    s=remain>0?"🍅 Work · "+mmss(remain)+" to break"
+              :"🍅 Work · tomato due";
+  else
+    s=remain>0?"🍅 Break · "+mmss(remain)+" left"
+              :"🍅 Break over · +"+mmss(now-POMO.target);
+  s+=" · "+"🍅".repeat(filled)+"○".repeat(cyc-filled);
+  if(POMO.completed)s+=" ×"+POMO.completed;
+  if(POMO.overrun)s+=" · overrun "+dur(POMO.overrun);
+  el.textContent=s;el.style.display="";
+}
+function esc(t){const d=document.createElement("div");d.textContent=t==null?"":t;return d.innerHTML;}
+// esc() leaves quotes alone, which is fine between tags and not fine inside an
+// attribute — anything going into one goes through escA.
+function escA(t){return esc(t).replace(/"/g,"&quot;");}
+function pad(n){return String(n).padStart(2,"0");}
+function localInput(ep){const d=new Date(ep*1000);
+return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+
+pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());}
+function note(text,bad){const m=$("msg");m.textContent=text;
+m.className="msg"+(bad?" bad":"");m.style.display="block";
+if(msgTimer)clearTimeout(msgTimer);
+msgTimer=setTimeout(()=>{m.style.display="none";},bad?8000:4000);}
+function reg(r){const id="r"+(nrow++);ROWS[id]=r;return id;}
+function acts(r,id){
+  if(!LAST||!LAST.editable)return"";
+  const canEdit=r.start_ep!=null&&r.end_ep!=null;
+  return '<td class="acts">'+
+    '<button class="btn" data-act="edit" data-id="'+id+'"'+
+      (canEdit?"":' disabled title="timestamp does not parse"')+">Edit</button>"+
+    '<button class="btn danger" data-act="del" data-id="'+id+'">Delete</button></td>';
+}
+function render(d){
+  $("t-today").textContent=dur(d.totals.today);
+  $("t-week").textContent=dur(d.totals.week);
+  $("t-all").textContent=dur(d.totals.all);
+  const dot=$("dot");dot.className="dot";
+  if(tick){clearInterval(tick);tick=null;}
+  POMO=d.pomodoro||null;pomoLine();
+  if(d.status==="RUNNING"){dot.classList.add("run");
+    $("who").textContent=d.category;
+    $("st").textContent=(d.running&&d.running.plan)?("Running — "+d.running.plan):"Running";
+    elapsed=d.running.elapsed;$("clock").textContent=clock(elapsed);
+    tick=setInterval(()=>{elapsed++;$("clock").textContent=clock(elapsed);pomoLine();},1000);
+  }else{$("who").textContent="Idle";$("st").textContent="No timer running";$("clock").textContent="";}
+  $("rows").innerHTML=d.table.length?d.table.map(r=>
+    "<tr><td>"+esc(r.category)+(r.running?' <span class="live">● live</span>':"")+
+    '</td><td class="n">'+dur(r.today)+'</td><td class="n">'+dur(r.week)+
+    '</td><td class="n">'+dur(r.all)+"</td></tr>").join(""):
+    '<tr><td colspan="4" class="empty">Nothing logged yet.</td></tr>';
+  ROWS={};nrow=0;
+  $("recent").innerHTML=d.recent.length?d.recent.map(r=>{const id=reg(r);
+    return '<tr data-row="'+id+'"><td class="mut when">'+
+    esc(r.start.slice(0,16).replace("T"," "))+
+    (r.note==="EDITED"?' <span class="mut edited">·edited</span>':"")+
+    '</td><td class="cat">'+esc(r.category)+'</td><td class="n">'+dur(r.dur)+
+    (r.pomodoros!==""?'<div class="mut pomotag">🍅×'+esc(r.pomodoros)+
+      ((+r.overrun||0)>0?" +"+dur(+r.overrun):"")+"</div>":"")+
+    '</td><td class="note">'+(r.plan?esc(r.plan):'<span class="mut">—</span>')+
+    '</td><td class="note">'+(r.recap?esc(r.recap):'<span class="mut">—</span>')+
+    "</td>"+acts(r,id)+"</tr>";}).join(""):
+    '<tr><td colspan="6" class="empty">No sessions yet.</td></tr>';
+  if(d.flagged.length){$("flagwrap").style.display="";
+    $("flagged").innerHTML=d.flagged.map(r=>{const id=reg(r);
+      return '<tr data-row="'+id+'"><td class="mut when">'+
+      esc(r.start.slice(0,16).replace("T"," "))+"</td><td>"+
+      esc(r.category)+'</td><td class="n">'+dur(r.dur)+'</td><td><span class="tag">'+
+      esc(r.note)+"</span></td>"+acts(r,id)+"</tr>";}).join("");
+  }else{$("flagwrap").style.display="none";}
+  $("foot").textContent="Updated "+d.generated;
+}
+function formHTML(r){
+  const opts=(LAST.categories||[]).map(c=>'<option value="'+escA(c.key)+'"'+
+    (c.key===r.key?" selected":"")+">"+esc(c.label)+"</option>").join("");
+  return '<div class="edit">'+
+    '<label>Start<input type="datetime-local" step="1" id="e-start" value="'+
+      escA(localInput(r.start_ep))+'"></label>'+
+    '<label>End<input type="datetime-local" step="1" id="e-end" value="'+
+      escA(localInput(r.end_ep))+'"></label>'+
+    '<label>Category<select id="e-cat">'+opts+"</select></label>"+
+    '<label class="wide">Planned<input type="text" id="e-plan" maxlength="500" value="'+
+      escA(r.plan)+'"></label>'+
+    '<label class="wide">Actually did<input type="text" id="e-recap" maxlength="500" value="'+
+      escA(r.recap)+'"></label>'+
+    '<div class="editfoot"><span id="e-dur" class="mut"></span><span class="spacer"></span>'+
+    '<button class="btn" data-act="cancel">Cancel</button>'+
+    '<button class="btn primary" data-act="save">Save</button></div></div>';
+}
+function epochOf(id){const v=$(id).value;
+  const t=v?new Date(v).getTime():NaN;
+  return Number.isFinite(t)?Math.floor(t/1000):null;}
+function showDur(){const a=epochOf("e-start"),b=epochOf("e-end");
+  $("e-dur").textContent=(a==null||b==null)?"—":
+    (b<a?"end is before start":"Duration "+dur(b-a));}
+function startEdit(id){
+  const r=ROWS[id],tr=document.querySelector('tr[data-row="'+id+'"]');
+  if(!r||!tr||r.start_ep==null||r.end_ep==null)return;
+  editing=id;
+  // Polling keeps running (it holds the server open) but stops touching the
+  // DOM, so a half-typed correction can't be wiped by a refresh.
+  tr.innerHTML='<td class="editcell" colspan="'+tr.cells.length+'">'+formHTML(r)+"</td>";
+  showDur();$("e-start").addEventListener("input",showDur);
+  $("e-end").addEventListener("input",showDur);$("e-end").focus();
+}
+function stopEdit(){editing=null;poll();}
+async function post(path,body){
+  const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{
+    method:"POST",cache:"no-store",
+    headers:{"Content-Type":"application/json","X-TimeTracker-Token":TOKEN},
+    body:JSON.stringify(body)});
+  let j=null;try{j=await r.json();}catch(e){}
+  return{ok:!!(j&&j.ok),msg:(j&&(j.message||j.error))||("HTTP "+r.status)};
+}
+function sel(r){return{start:r.start,dur:r.dur,key:r.key};}
+async function save(){
+  const r=ROWS[editing];if(!r)return;
+  const a=epochOf("e-start"),b=epochOf("e-end");
+  if(a==null||b==null){note("Enter a valid start and end time.",true);return;}
+  const body=Object.assign(sel(r),{new_start:a,new_end:b,
+    new_key:$("e-cat").value,plan:$("e-plan").value,recap:$("e-recap").value});
+  const res=await post("/api/session/update",body);
+  note(res.msg,!res.ok);
+  if(res.ok)stopEdit();
+}
+async function del(id){
+  const r=ROWS[id];if(!r)return;
+  const nl="\\n";
+  if(!confirm("Delete this session?"+nl+nl+r.category+" — "+dur(r.dur)+
+    nl+"Started "+r.start.slice(0,16).replace("T"," ")+nl+nl+
+    "It is moved to sessions.deleted.tsv, not shredded."))return;
+  const res=await post("/api/session/delete",sel(r));
+  note(res.msg,!res.ok);
+  if(res.ok&&editing===id)editing=null;
+  poll();
+}
+document.addEventListener("click",e=>{
+  const b=e.target.closest("button[data-act]");if(!b)return;
+  const act=b.dataset.act;
+  if(act==="edit"){if(editing)stopEdit();startEdit(b.dataset.id);}
+  else if(act==="del"){del(b.dataset.id);}
+  else if(act==="cancel"){stopEdit();}
+  else if(act==="save"){save();}
+});
+document.addEventListener("keydown",e=>{
+  if(!editing)return;
+  if(e.key==="Escape")stopEdit();
+  else if(e.key==="Enter"&&e.target.tagName!=="BUTTON")save();
+});
+async function poll(){try{const r=await fetch("/api/data?t="+encodeURIComponent(TOKEN),
+  {cache:"no-store"});
+  if(r.ok){const d=await r.json();LAST=d;
+    if(editing){$("foot").textContent="Editing — updates paused";return;}
+    render(d);}
+  else $("foot").textContent="Server rejected request.";}
+  catch(e){$("foot").textContent="Dashboard server stopped.";if(tick)clearInterval(tick);}}
+poll();setInterval(poll,__POLL__);
+</script></body></html>
+"""
+
+SETTINGS_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>TimeTracker Settings</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>__CSS__
+.wrap{max-width:560px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:2px 20px}
+.row{display:grid;grid-template-columns:1fr 150px;gap:2px 16px;
+padding:14px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .name{font-weight:600;font-size:14px}
+.row .hint{color:var(--mut);font-size:12px}
+.row input,.row select{grid-column:2;grid-row:1/span 2;align-self:center;
+font:inherit;font-size:14px;padding:6px 8px;width:100%;
+color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:7px}
+.row input:focus,.row select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.foot{display:flex;align-items:center;gap:10px;padding-top:14px}
+.foot .spacer{flex:1}
+.foot #stat{font-size:12px;text-align:right}
+.warn{color:var(--warn)}
+/* An unsaved row says so, and its field takes the accent border — the panel
+   shows what Save is about to do before you press it. */
+.row.changed input,.row.changed select{border-color:var(--accent)}
+.row.changed .name::after{content:"unsaved";display:inline-block;font-size:10px;
+padding:1px 6px;border-radius:5px;border:1px solid var(--accent);
+color:var(--accent);margin-left:8px;vertical-align:middle;letter-spacing:.04em;
+text-transform:uppercase;font-weight:600}
+.empty{padding:22px 0;color:var(--mut);font-size:14px}
+/* break menu: playlist rows and the two small add forms */
+.prow{display:grid;grid-template-columns:auto 1fr auto;gap:2px 12px;
+align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
+.prow:last-child{border-bottom:0}
+.psw{width:26px;height:26px;border-radius:5px;grid-row:1/span 2}
+.pname{font-weight:600;font-size:14px;min-width:0;overflow:hidden;
+text-overflow:ellipsis;white-space:nowrap}
+.puri{grid-column:2;font-size:11px;color:var(--mut);font-family:ui-monospace,
+Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pacts{grid-column:3;grid-row:1/span 2;white-space:nowrap;text-align:right}
+.prow.work .pname{color:var(--live)}
+.addform{display:flex;gap:8px;padding:14px 0 4px;flex-wrap:wrap}
+.addform input{flex:1 1 150px;min-width:0;font:inherit;font-size:14px;
+padding:6px 8px;color:var(--fg);background:var(--bg);
+border:1px solid var(--line);border-radius:7px}
+.addform input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.addform .btn{flex:none}
+.onerow{display:flex;gap:8px;align-items:center;padding:14px 0 4px}
+.onerow input,.onerow select{flex:1;min-width:0;font:inherit;font-size:14px;
+padding:6px 8px;color:var(--fg);background:var(--bg);
+border:1px solid var(--line);border-radius:7px}
+.onerow input:focus,.onerow select:focus{outline:2px solid var(--accent);
+outline-offset:-1px}
+/* A <select> keeps the platform's own popup-button skin — grey, light even in
+   dark mode, and nothing like the rest of this page — until appearance is
+   turned off, and turning it off also takes the disclosure arrow with it. So
+   the arrow is drawn back on as a background image, and the padding on the
+   right is what keeps a long calendar name from running underneath it. */
+.onerow select,.row select{-webkit-appearance:none;appearance:none;
+padding-right:26px;cursor:pointer;
+background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+background-repeat:no-repeat;background-position:right 9px center;
+background-size:10px 6px}
+@media (prefers-color-scheme:dark){.onerow select,.row select{
+background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9aa0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}}
+/* The picker is the row's subject; the two buttons beside it are not. */
+.onerow .btn{flex:none}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+margin:34px 0 4px;font-weight:600}
+.lead{color:var(--mut);font-size:12px;margin:0 0 9px}
+/* Same two-row grid as .row, but the controls column sizes to its buttons. */
+.crow{display:grid;grid-template-columns:1fr auto;gap:2px 12px;
+padding:12px 0;border-bottom:1px solid var(--line)}
+.crow:last-child{border-bottom:0}
+.crow .cname{font-weight:600;font-size:14px}
+.crow .hint{color:var(--mut);font-size:12px}
+.crow.off .cname{color:var(--mut);font-weight:500}
+.crow.pending{opacity:.45}
+.cacts{grid-column:2;grid-row:1/span 2;align-self:center;white-space:nowrap;
+text-align:right}
+.badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:5px;
+border:1px solid var(--line);color:var(--mut);margin-left:7px;
+vertical-align:middle;letter-spacing:.04em;text-transform:uppercase}
+.badge.on{border-color:var(--live);color:var(--live)}
+@media (max-width:480px){.row{grid-template-columns:1fr 110px}
+.crow{grid-template-columns:1fr}
+.cacts{grid-column:1;grid-row:auto;text-align:left;margin-top:7px}
+.cacts .btn{margin:0 5px 0 0}}
+</style></head><body><div class="wrap">
+<h1>TimeTracker Settings</h1>
+<div class="sub"><a id="nav-back" href="#">&larr; Dashboard</a></div>
+<div class="msg" id="msg"></div>
+<div class="panel" id="panel"><div class="empty">Loading&hellip;</div></div>
+<div class="foot"><span class="spacer"></span><span class="mut" id="stat"></span>
+<button class="btn primary" id="save" disabled>Save</button></div>
+<h2>Break playlists</h2>
+<div class="lead">What the Spotify panel offers during a break. Copy a link
+from Spotify (right-click a playlist &rarr; Share &rarr; Copy link) and give it
+a name — nothing here can ask Spotify what your playlists are called. Mark one
+as <b>work</b> and it is kept out of the break list and started again when you
+press &ldquo;I'm back&rdquo;.</div>
+<div class="panel" id="pls"><div class="empty">Loading&hellip;</div></div>
+<div class="addform">
+  <input id="pl-name" type="text" placeholder="Name" maxlength="60">
+  <input id="pl-uri" type="text" placeholder="Spotify link" maxlength="300">
+  <button class="btn primary" id="pl-add">Add</button>
+</div>
+
+<h2>Calendar painting</h2>
+<div class="lead">Every session you log is painted onto this calendar, and
+kept in step when you edit or delete one. Give it an empty calendar of its own
+&mdash; everything in it inside the last <span id="pd-days">14</span> days is
+rewritten to match the log, and nothing outside that window or in the future is
+touched. Make it in Google Calendar and tick it in
+<a href="https://calendar.google.com/calendar/syncselect" target="_blank"
+rel="noreferrer">sync settings</a> to have it on your phone.</div>
+<div class="onerow">
+  <select id="pc-name"><option value="">Loading&hellip;</option></select>
+  <button class="btn" id="pc-refresh">Refresh</button>
+  <button class="btn" id="pc-save">Save</button>
+</div>
+<div class="lead" id="pc-note"></div>
+
+<h2>Break notes</h2>
+<div class="lead">Which Reminders list &ldquo;Add Reminder&rdquo; files into.
+It is created the first time something is saved, so a list of its own costs
+nothing — move things out of it afterwards.</div>
+<div class="onerow">
+  <input id="rl-name" type="text" placeholder="Pause Notes" maxlength="60">
+  <button class="btn" id="rl-save">Save</button>
+</div>
+
+<h2>Categories</h2>
+<div class="lead">Hide takes a category out of the launcher and the toggle, and
+is reversible. Delete retires it for good. Either way every logged hour stays
+in the log.</div>
+<div class="panel" id="cats"><div class="empty">Loading&hellip;</div></div>
+</div><script>
+const TOKEN=new URLSearchParams(location.search).get("t")||"";
+const $=i=>document.getElementById(i);
+$("nav-back").href="/?t="+encodeURIComponent(TOKEN);
+// Display names only — the keys, defaults and ranges come from the server,
+// which gets them from settings.sh. An unlisted key still renders by its key.
+const META={
+ pomodoro_minutes:["Pomodoro length","Minutes of one work session"],
+ break_minutes:["Short break","Minutes of the short break"],
+ long_break_minutes:["Long break","Minutes of the long break"],
+ long_break_every:["Long break every","Every Nth completed pomodoro gets the long break"],
+ snooze_minutes:["Snooze","Minutes a snoozed tomato is postponed"],
+ auto_accept_seconds:["No-answer timeout",
+   "Seconds before an unanswered tomato takes the break by itself"],
+ pomodoro_default:["Pomodoro pre-selected",
+   "Start the prompt with the Pomodoro mode box already ticked"],
+ sound:["Sound","Play a sound with pomodoro notifications"],
+ pause_media:["Pause media on break",
+   "Pause video and music everywhere when the tomato takes the screen"],
+ easter_egg:["Easter egg","Let the tomato open its hidden game on a break"],
+ spotify:["Spotify in the break menu",
+   "Offer the Spotify remote behind the hamburger on the pause screen"],
+ spotify_resume_work:["Work playlist when you're back",
+   "End a break you played music in by starting the work playlist again"],
+ reminders:["Add Reminder in the break menu",
+   "Offer a capture box that files into Apple Reminders"],
+ paint_calendar:["Paint sessions onto a calendar",
+   "Write every logged session to the calendar chosen below"],
+ paint_days:["Repaint window",
+   "How many days back each paint reconciles against the log"],
+ paint_min_minutes:["Shortest painted session",
+   "Sessions shorter than this are left off the calendar"]};
+let CUR={},CATS=[],SEEN="",BUSY=false,SAVING=false,msgTimer=null,statTimer=null;
+function esc(t){const d=document.createElement("div");d.textContent=t==null?"":t;return d.innerHTML;}
+function escA(t){return esc(t).replace(/"/g,"&quot;");}
+function note(text,bad){const m=$("msg");m.textContent=text;
+m.className="msg"+(bad?" bad":"");m.style.display="block";
+if(msgTimer)clearTimeout(msgTimer);
+msgTimer=setTimeout(()=>{m.style.display="none";},bad?8000:4000);}
+function render(list){
+  CUR={};
+  if(!list.length){$("panel").innerHTML=
+    '<div class="empty">Could not load settings — is settings.sh installed?</div>';return;}
+  $("panel").innerHTML=list.map(s=>{
+    CUR[s.key]=s.value;
+    const m=META[s.key]||[s.key,""];
+    const hint=(s.min!=null?s.min+"\\u2013"+s.max:"on / off")+" \\u00b7 default "+esc(s.default);
+    const field=s.min!=null
+      ?'<input type="number" id="f-'+escA(s.key)+'" min="'+s.min+'" max="'+s.max+
+        '" step="'+(s.step||1)+'" value="'+escA(s.value)+'">'
+      :'<select id="f-'+escA(s.key)+'">'+
+        '<option value="on"'+(s.value==="on"?" selected":"")+'>On</option>'+
+        '<option value="off"'+(s.value==="off"?" selected":"")+'>Off</option></select>';
+    return '<div class="row"><span class="name">'+esc(m[0])+'</span>'+field+
+      '<span class="hint">'+(m[1]?esc(m[1])+" \\u2014 ":"")+hint+'</span></div>';
+  }).join("");
+  dirty();
+}
+// The line beside the Save button. hold=ms keeps a result visible for that
+// long before the unsaved-count takes the line back.
+function stat(text,bad,hold){
+  const s=$("stat");s.textContent=text;s.className=bad?"warn":"mut";
+  if(statTimer){clearTimeout(statTimer);statTimer=null;}
+  if(hold)statTimer=setTimeout(()=>{statTimer=null;dirty();},hold);
+}
+// What Save would send. Also the single source of truth for whether there is
+// anything to send — the button is disabled whenever this is empty, so the
+// old "Nothing changed." message has nothing left to report.
+function pending(){
+  const changes={};
+  for(const k in CUR){const f=$("f-"+k);
+    if(f&&String(f.value)!==CUR[k])changes[k]=String(f.value);}
+  return changes;
+}
+function dirty(){
+  const ch=pending(),n=Object.keys(ch).length;
+  for(const k in CUR){const f=$("f-"+k);
+    if(f&&f.closest(".row"))f.closest(".row").classList.toggle("changed",k in ch);}
+  if(!SAVING){
+    $("save").disabled=!n;
+    $("save").textContent="Save";
+    if(!statTimer)stat(n?n+(n===1?" unsaved change":" unsaved changes"):"");
+  }
+  return ch;
+}
+async function load(){
+  try{
+    const r=await fetch("/api/settings?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
+    if(!r.ok){note("Server rejected request.",true);return;}
+    const d=await r.json();render(d.settings||[]);
+  }catch(e){note("Dashboard server stopped.",true);}
+}
+async function save(){
+  if(SAVING)return;
+  const changes=pending();
+  if(!Object.keys(changes).length)return;   // the button is disabled anyway
+  SAVING=true;
+  $("save").disabled=true;$("save").textContent="Saving\u2026";
+  stat("Saving\u2026");
+  // The number inputs' min/max are a convenience; action.sh is the authority
+  // and its message is surfaced as-is on rejection.
+  let j=null,ok=false;
+  try{
+    const r=await fetch("/api/setconf?t="+encodeURIComponent(TOKEN),{
+      method:"POST",cache:"no-store",
+      headers:{"Content-Type":"application/json","X-TimeTracker-Token":TOKEN},
+      body:JSON.stringify({changes})});
+    try{j=await r.json();}catch(e){}
+    ok=!!(j&&j.ok);
+    note((j&&(j.message||j.error))||("HTTP "+r.status),!ok);
+  }catch(e){note("Dashboard server stopped.",true);}
+  SAVING=false;$("save").textContent="Save";
+  if(ok){
+    // Re-read from the server: what it stored is the truth, not what was typed.
+    await load();
+    stat("\u2713 Saved",false,4000);
+  }else{
+    // Values stay as typed so the rejected one can be fixed, and the rows stay
+    // marked. The toast carries the reason; this line just holds the verdict.
+    dirty();stat("Not saved",true);
+  }
+}
+// --- break menu ------------------------------------------------------------
+// Reads its own endpoint, writes through action.sh like everything else here.
+// The swatch is the same name-derived colour the overlay draws, so a playlist
+// looks the same in both places without either of them storing a colour.
+let PLS=[],PSEEN="",RLNAME="";
+function plHue(t){let h=0;for(let i=0;i<t.length;i++)h=(h*31+t.charCodeAt(i))%360;return h;}
+function plTile(t){const h=plHue(t);
+  return "linear-gradient(145deg,hsl("+h+",40%,33%),hsl("+((h+40)%360)+",36%,17%))";}
+function plRow(p){
+  return '<div class="prow'+(p.work?" work":"")+'">'+
+    '<span class="psw" style="background:'+plTile(p.name)+'"></span>'+
+    '<span class="pname">'+esc(p.name)+
+      (p.work?' <span class="badge on">work</span>':"")+'</span>'+
+    '<span class="pacts">'+
+      '<button class="btn" data-pl="work" data-uri="'+escA(p.uri)+'">'+
+        (p.work?"Unset work":"Set as work")+'</button>'+
+      '<button class="btn danger" data-pl="del" data-uri="'+escA(p.uri)+'">Remove</button>'+
+    '</span>'+
+    '<span class="puri">'+esc(p.uri)+'</span></div>';
+}
+async function loadBreak(force){
+  try{
+    const r=await fetch("/api/breakmenu?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
+    if(!r.ok){note("Server rejected request.",true);return;}
+    const d=await r.json();
+    PLS=d.playlists||[];
+    RLNAME=d.reminders_list||"";
+    paintRender(d);
+    if(d.paint_days)$("pd-days").textContent=String(d.paint_days);
+    // The field is only ever seeded, never overwritten: retyping a name under
+    // someone's cursor because a poll landed is the bug this avoids.
+    const rl=$("rl-name");
+    if(document.activeElement!==rl&&!rl.dataset.touched)rl.value=RLNAME;
+    const j=JSON.stringify(PLS);
+    if(!force&&j===PSEEN)return;
+    PSEEN=j;
+    $("pls").innerHTML=PLS.length?PLS.map(plRow).join("")
+      :'<div class="empty">No playlists yet. Paste a Spotify link below.</div>';
+  }catch(e){note("Dashboard server stopped.",true);}
+}
+async function breakPost(path,body,verb){
+  if(BUSY)return;
+  BUSY=true;
+  note(verb+"…");
+  let j=null;
+  try{
+    const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{
+      method:"POST",cache:"no-store",
+      headers:{"Content-Type":"application/json","X-TimeTracker-Token":TOKEN},
+      body:JSON.stringify(body)});
+    try{j=await r.json();}catch(e){}
+    note((j&&(j.message||j.error))||("HTTP "+r.status),!(j&&j.ok));
+  }catch(e){note("Dashboard server stopped.",true);}
+  BUSY=false;
+  loadBreak(true);
+  return !!(j&&j.ok);
+}
+document.addEventListener("click",async e=>{
+  const b=e.target.closest("button[data-pl]");
+  if(!b)return;
+  const uri=b.dataset.uri;
+  if(b.dataset.pl==="del"){
+    const p=PLS.find(x=>x.uri===uri);
+    if(!confirm("Remove "+(p?p.name:"this playlist")+" from the break menu?"))return;
+    breakPost("/api/playlist/delete",{uri},"Removing");
+  }else{
+    const p=PLS.find(x=>x.uri===uri);
+    // "-" clears the mark, which is what the button says when one is set.
+    breakPost("/api/playlist/work",{uri:(p&&p.work)?"-":uri},"Saving");
+  }
+});
+$("pl-add").addEventListener("click",async()=>{
+  const name=$("pl-name").value.trim(),uri=$("pl-uri").value.trim();
+  if(!name||!uri){note("A name and a Spotify link, please.",true);return;}
+  if(await breakPost("/api/playlist/add",{name,uri},"Adding")){
+    $("pl-name").value="";$("pl-uri").value="";$("pl-name").focus();
+  }
+});
+// --- calendar painting -----------------------------------------------------
+// The dropdown is filled from the helper's own dump, so it can only ever offer
+// calendars that actually exist and can actually be written to. Refresh runs
+// the helper again, which is also how the permission prompt gets raised from
+// here rather than from a Spotlight verb.
+function paintRender(d){
+  const sel=$("pc-name"),chosen=d.paint_calendar||"",list=d.paint_choices||[];
+  // Never repaint the control under an open dropdown or a made choice.
+  if(document.activeElement===sel||sel.dataset.touched)return;
+  sel.innerHTML="";
+  const none=document.createElement("option");
+  none.value="";none.textContent=list.length?"— none —":"— run Refresh —";
+  sel.appendChild(none);
+  let found=false;
+  for(const c of list){
+    const o=document.createElement("option");
+    o.value=c.title;
+    o.textContent=c.source?c.title+"  ("+c.source+")":c.title;
+    if(c.title===chosen){o.selected=true;found=true;}
+    sel.appendChild(o);
+  }
+  // A calendar that was chosen and has since gone (renamed, account removed)
+  // must still show, or the page would quietly claim nothing is set.
+  if(chosen&&!found){
+    const o=document.createElement("option");
+    o.value=chosen;o.textContent=chosen+"  (not found)";o.selected=true;
+    sel.appendChild(o);
+  }
+  const note=$("pc-note");
+  if(!list.length)note.textContent="No calendars listed yet — press Refresh, and allow calendar access when macOS asks.";
+  else if(chosen&&!found)note.textContent="“"+chosen+"” is not among your writable calendars any more. Nothing is being painted.";
+  else if(!chosen)note.textContent="Nothing is painted until a calendar is chosen.";
+  else note.textContent="";
+}
+$("pc-name").addEventListener("change",()=>{$("pc-name").dataset.touched="1";});
+$("pc-save").addEventListener("click",async()=>{
+  const name=$("pc-name").value;
+  if(await breakPost("/api/paint/calendar",{name},name?"Saving":"Clearing"))
+    $("pc-name").dataset.touched="";
+});
+$("pc-refresh").addEventListener("click",async()=>{
+  const b=$("pc-refresh");
+  b.disabled=true;b.textContent="Asking\u2026";
+  await breakPost("/api/paint/refresh",{},"Reading your calendars");
+  b.disabled=false;b.textContent="Refresh";
+  $("pc-name").dataset.touched="";
+  loadBreak(true);
+});
+$("rl-save").addEventListener("click",async()=>{
+  const name=$("rl-name").value.trim();
+  if(!name){note("Give the list a name.",true);return;}
+  if(await breakPost("/api/reminders/list",{name},"Saving"))
+    $("rl-name").dataset.touched="";
+});
+$("rl-name").addEventListener("input",()=>{$("rl-name").dataset.touched="1";});
+// Enter in either add field is Add, and must not fall through to the settings
+// Save below — which is what the global Enter handler would otherwise do.
+for(const id of ["pl-name","pl-uri"])
+  $(id).addEventListener("keydown",e=>{
+    if(e.key==="Enter"){e.preventDefault();e.stopPropagation();$("pl-add").click();}});
+$("rl-name").addEventListener("keydown",e=>{
+  if(e.key==="Enter"){e.preventDefault();e.stopPropagation();$("rl-save").click();}});
+
+// --- categories ------------------------------------------------------------
+function dur(s){s=Math.abs(s|0);
+if(s<60)return s+"s";const h=(s/3600)|0,m=((s%3600)/60)|0;
+return h?h+"h "+String(m).padStart(2,"0")+"m":m+"m";}
+function catRow(c){
+  // A key that only survives in the log has nothing left to act on — it is
+  // listed so its hours are accounted for, not so it can be retired twice.
+  const live=c.running?' disabled title="running \u2014 stop the timer first"':"";
+  const acts=c.orphan?'<span class="mut">\u2014</span>':
+    '<button class="btn" data-cat="hide" data-key="'+escA(c.key)+'"'+live+">"+
+      (c.hidden?"Show":"Hide")+"</button>"+
+    '<button class="btn danger" data-cat="del" data-key="'+escA(c.key)+'"'+live+
+      ">Delete</button>";
+  const bits=[c.sessions
+    ?c.sessions+(c.sessions===1?" session":" sessions")+" \u00b7 "+dur(c.total)
+    :"nothing logged"];
+  if(c.orphan)bits.push("deleted \u2014 history only");
+  else if(c.hidden)bits.push("hidden from the launcher");
+  return '<div class="crow'+(c.hidden||c.orphan?" off":"")+'">'+
+    '<span class="cname">'+esc(c.label)+
+      (c.running?' <span class="badge on">live</span>':"")+
+      (c.hidden?' <span class="badge">hidden</span>':"")+"</span>"+
+    '<span class="cacts">'+acts+"</span>"+
+    '<span class="hint">'+esc(bits.join(" \u00b7 "))+"</span></div>";
+}
+// force=true rebuilds the panel even if the data is unchanged, which is how a
+// refused mutation gets its buttons back — the payload it tried to change is
+// identical, and without this the panel would stay disabled.
+async function loadCats(force){
+  try{
+    const r=await fetch("/api/categories?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
+    if(!r.ok){note("Server rejected request.",true);return;}
+    const d=await r.json();
+    const j=JSON.stringify(d.categories||[]);
+    CATS=d.categories||[];
+    // Repainting identical rows every couple of seconds would swallow a click
+    // that lands mid-refresh, so an unchanged list leaves the DOM alone.
+    if(!force&&j===SEEN)return;
+    SEEN=j;
+    $("cats").innerHTML=CATS.length?CATS.map(catRow).join("")
+      :'<div class="empty">No categories yet \u2014 create one with "time new".</div>';
+  }catch(e){note("Dashboard server stopped.",true);}
+}
+// The request rebuilds every launcher bundle before it answers, which takes a
+// couple of seconds. Nothing may look unclicked for that long: the row dims and
+// says what it is doing, and the panel refuses further clicks until it lands.
+async function catPost(path,body,btn,verb,c){
+  BUSY=true;
+  const row=btn.closest(".crow");
+  if(row)row.classList.add("pending");
+  document.querySelectorAll("#cats button").forEach(x=>{x.disabled=true;});
+  btn.textContent=verb+"\u2026";
+  note(verb+" "+c.label+"\u2026");
+  let j=null;
+  try{
+    const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{
+      method:"POST",cache:"no-store",
+      headers:{"Content-Type":"application/json","X-TimeTracker-Token":TOKEN},
+      body:JSON.stringify(body)});
+    try{j=await r.json();}catch(e){}
+    note((j&&(j.message||j.error))||("HTTP "+r.status),!(j&&j.ok));
+  }catch(e){note("Dashboard server stopped.",true);}
+  // Unconditional: a failed request has to hand the buttons back, not leave
+  // the panel dead.
+  BUSY=false;
+  loadCats(true);
+}
+document.addEventListener("click",e=>{
+  const b=e.target.closest("button[data-cat]");if(!b||BUSY)return;
+  const c=CATS.find(x=>x.key===b.dataset.key);if(!c)return;
+  if(b.dataset.cat==="hide"){
+    catPost("/api/category/hide",{key:c.key,hidden:!c.hidden},b,
+      c.hidden?"Showing":"Hiding",c);return;}
+  const nl="\\n";
+  let w="Delete this category?"+nl+nl+c.label+nl+nl+
+    "Its launcher entry goes away and the row moves to categories.deleted.tsv.";
+  // The "shows as the key" half only means anything if there is a name to lose.
+  if(c.sessions)w+=nl+nl+c.sessions+" logged session(s) keep their hours"+
+    (c.label!==c.key?", but will show as "+c.key+" instead of the full name.":".");
+  w+=nl+nl+"Hide it instead if you only want it out of the way.";
+  if(!confirm(w))return;
+  catPost("/api/category/delete",{key:c.key},b,"Deleting",c);
+});
+$("panel").addEventListener("input",dirty);
+$("panel").addEventListener("change",dirty);
+$("save").addEventListener("click",save);
+document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.tagName!=="BUTTON")save();});
+load();loadCats();loadBreak();
+// Only the categories poll: a category can appear from "time new" or a timer
+// can start while this page sits open. The settings above are deliberately
+// left alone — re-rendering them would wipe a value you are halfway through
+// typing.
+setInterval(()=>{if(!BUSY){loadCats();loadBreak();}},__POLL__);
+</script></body></html>
+"""
+
+
+# --------------------------------------------------------------------------
+# server
+# --------------------------------------------------------------------------
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "TimeTracker"
+    token = ""
+
+    def log_message(self, *_args):
+        pass  # don't spam the console
+
+    def _deny(self, code=403):
+        self.send_response(code)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _json(self, code, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _host_ok(self):
+        # Only accept loopback Host values, so a public website can't point a
+        # DNS name at 127.0.0.1 and read the page from the user's browser.
+        host = (self.headers.get("Host") or "").split(":")[0]
+        return host in ("127.0.0.1", "localhost", "[::1]", "::1")
+
+    def do_GET(self):
+        global _last_request
+        _last_request = time.time()
+
+        if not self._host_ok():
+            return self._deny()
+
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        supplied = (params.get("t") or [""])[0]
+        if not secrets.compare_digest(supplied, self.token):
+            return self._deny()
+
+        if parsed.path == "/":
+            body = (PAGE.replace("__CSS__", THEME_CSS)
+                    .replace("__POLL__", str(POLL_MS)).encode("utf-8"))
+            ctype = "text/html; charset=utf-8"
+        elif parsed.path == "/settings":
+            body = (SETTINGS_PAGE.replace("__CSS__", THEME_CSS)
+                    .replace("__POLL__", str(POLL_MS)).encode("utf-8"))
+            ctype = "text/html; charset=utf-8"
+        elif parsed.path == "/api/data":
+            body = json.dumps(build_payload()).encode("utf-8")
+            ctype = "application/json"
+        elif parsed.path == "/api/settings":
+            body = json.dumps({"settings": read_settings()}).encode("utf-8")
+            ctype = "application/json"
+        elif parsed.path == "/api/breakmenu":
+            body = json.dumps({"playlists": read_playlists(),
+                               "reminders_list": read_reminders_list(),
+                               "paint_calendar": read_paint_calendar(),
+                               "paint_choices": read_paint_choices(),
+                               "paint_days": setting_int("paint_days", 14),
+                               }).encode("utf-8")
+            ctype = "application/json"
+        elif parsed.path == "/api/categories":
+            body = json.dumps(
+                {"categories": build_categories()}).encode("utf-8")
+            ctype = "application/json"
+        else:
+            return self._deny(404)
+
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'none'; style-src 'unsafe-inline'; "
+                         "script-src 'unsafe-inline'; connect-src 'self'")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+    # ----- mutations --------------------------------------------------
+    # Everything below exists so that one specific mistake — forgetting to stop
+    # the timer — is fixable from the page you're already looking at.
+
+    def _origin_ok(self):
+        port = self.server.server_address[1]
+        allowed = (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+        # Browsers send Origin on every POST, same-origin included, so a
+        # missing one means the request didn't come from the page.
+        return (self.headers.get("Origin") or "") in allowed
+
+    def _read_body(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return None
+        if length <= 0 or length > MAX_BODY:
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    def _run_action(self, args):
+        """Hand the write to action.sh — argv list, never a shell string."""
+        if not os.access(ACTION_SH, os.X_OK):
+            return False, "action.sh not found next to dashboard.py"
+        try:
+            # errors="replace": a stray non-UTF-8 byte in action.sh's output
+            # must garble one character, not kill the request thread.
+            proc = subprocess.run([ACTION_SH] + [str(a) for a in args],
+                                  capture_output=True, text=True,
+                                  errors="replace", timeout=20)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"could not run action.sh ({exc.__class__.__name__})"
+        msg = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+        return proc.returncode == 0, msg or "done"
+
+    def _sync_apps(self):
+        """Rebuild the launcher bundles; returns a warning, or "" on success.
+
+        Called only after action.sh has already accepted a category change.
+        It takes no arguments — nothing from the request reaches it — and a
+        failure here is cosmetic (a stale app in Spotlight), never data loss,
+        so it degrades to a message instead of failing the mutation.
+        """
+        if not os.access(SYNC_APPS, os.X_OK):
+            return "launcher not rebuilt (sync-apps.sh missing)"
+        try:
+            proc = subprocess.run([SYNC_APPS], capture_output=True, text=True,
+                                  errors="replace", timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            return "launcher not rebuilt — run sync-apps.sh by hand"
+        if proc.returncode != 0:
+            return "launcher may be stale — run sync-apps.sh by hand"
+        return ""
+
+    def do_POST(self):
+        global _last_request
+        _last_request = time.time()
+
+        if not self._host_ok():
+            return self._deny()
+
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        supplied = (params.get("t") or [""])[0]
+        if not secrets.compare_digest(supplied, self.token):
+            return self._deny()
+
+        # Three CSRF checks, each independently sufficient: a cross-origin page
+        # can't set a custom header or a JSON content type without a preflight,
+        # and OPTIONS is never answered here.
+        header_token = self.headers.get("X-TimeTracker-Token") or ""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        if (not secrets.compare_digest(header_token, self.token)
+                or ctype != "application/json"
+                or not self._origin_ok()):
+            return self._deny()
+
+        body = self._read_body()
+        if not isinstance(body, dict):
+            return self._json(400, {"ok": False, "error": "bad request body"})
+
+        def text(name, limit=500):
+            v = body.get(name, "")
+            return v[:limit] if isinstance(v, str) else ""
+
+        def whole(name):
+            v = body.get(name)
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+        if parsed.path == "/api/setconf":
+            # One action.sh run per changed key, exactly like the session
+            # mutations: the table in settings.sh is the authority, not this
+            # server, and its message is passed through on rejection.
+            changes = body.get("changes")
+            if (not isinstance(changes, dict) or not changes
+                    or len(changes) > 32):
+                return self._json(400, {"ok": False, "error": "bad fields"})
+            for k, v in changes.items():
+                if (not isinstance(k, str) or not isinstance(v, str)
+                        or not k or len(k) > 64 or len(v) > 64):
+                    return self._json(400, {"ok": False, "error": "bad fields"})
+            msgs = []
+            for k, v in changes.items():
+                ok, msg = self._run_action(["setconf", k, v])
+                if not ok:
+                    return self._json(409, {"ok": False, "message": msg})
+                msgs.append(msg)
+            return self._json(200, {"ok": True, "message": " — ".join(msgs)})
+
+        if parsed.path == "/api/paint/refresh":
+            # Runs the helper so it can re-dump the calendar list — and, the
+            # first time, so macOS can ask about calendar access. It takes no
+            # arguments; nothing from the request reaches it.
+            if not os.access(PAINT_SH, os.X_OK):
+                return self._json(409, {"ok": False,
+                                        "message": "paint-calendar.sh missing"})
+            try:
+                proc = subprocess.run([PAINT_SH, "--list"], capture_output=True,
+                                      text=True, errors="replace", timeout=90)
+            except (OSError, subprocess.SubprocessError):
+                return self._json(409, {"ok": False,
+                                        "message": "could not run the calendar helper"})
+            msg = (proc.stdout or "").strip() or "done"
+            return self._json(200, {"ok": proc.returncode == 0, "message": msg})
+
+        if parsed.path == "/api/paint/calendar":
+            # "" clears the choice, which is the honest way to turn painting
+            # off without touching the setting.
+            cal_name = text("name", 200)
+            ok, msg = self._run_action(["setpaintcal", cal_name or "-"])
+            return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+        if parsed.path in ("/api/playlist/add", "/api/playlist/delete",
+                           "/api/playlist/work", "/api/reminders/list"):
+            # The break menu's two lists. Same shape as every other mutation
+            # here: validate the field is a plausible string, hand it to
+            # action.sh, pass its message back unchanged. action.sh owns the
+            # question of what a Spotify link is — this server does not parse
+            # one, so it cannot disagree with the thing that stores it.
+            if parsed.path == "/api/playlist/add":
+                pl_name, pl_uri = text("name", 60), text("uri", 300)
+                if not pl_name or not pl_uri:
+                    return self._json(400, {"ok": False, "error": "bad fields"})
+                ok, msg = self._run_action(["addplaylist", pl_name, pl_uri])
+            elif parsed.path == "/api/playlist/delete":
+                pl_uri = text("uri", 300)
+                if not pl_uri:
+                    return self._json(400, {"ok": False, "error": "bad fields"})
+                ok, msg = self._run_action(["delplaylist", pl_uri])
+            elif parsed.path == "/api/playlist/work":
+                pl_uri = text("uri", 300)
+                if not pl_uri:
+                    return self._json(400, {"ok": False, "error": "bad fields"})
+                ok, msg = self._run_action(["workplaylist", pl_uri])
+            else:
+                rl_name = text("name", 60)
+                if not rl_name:
+                    return self._json(400, {"ok": False, "error": "bad fields"})
+                ok, msg = self._run_action(["setremlist", rl_name])
+            return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+        if parsed.path in ("/api/category/hide", "/api/category/delete"):
+            # Retiring a category is a two-step write: action.sh owns the TSV,
+            # sync-apps.sh owns the bundles. Only the first can fail the
+            # request; the second is reported and moved past.
+            cat_key = text("key", 120)
+            if not cat_key:
+                return self._json(400, {"ok": False, "error": "bad category"})
+            if parsed.path == "/api/category/hide":
+                want = body.get("hidden")
+                if not isinstance(want, bool):
+                    return self._json(400, {"ok": False, "error": "bad fields"})
+                ok, msg = self._run_action(
+                    ["hidecat", cat_key, "on" if want else "off"])
+            else:
+                ok, msg = self._run_action(["delcat", cat_key])
+            if ok:
+                warn = self._sync_apps()
+                if warn:
+                    msg = f"{msg} — {warn}"
+            return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+        sel_start, sel_key = text("start", 40), text("key", 120)
+        sel_dur = whole("dur")
+        if not sel_start or not sel_key or sel_dur is None or sel_dur < 0:
+            return self._json(400, {"ok": False, "error": "bad session selector"})
+
+        if parsed.path == "/api/session/delete":
+            ok, msg = self._run_action(
+                ["delsession", sel_start, sel_dur, sel_key])
+        elif parsed.path == "/api/session/update":
+            new_start, new_end = whole("new_start"), whole("new_end")
+            new_key = text("new_key", 120)
+            if new_start is None or new_end is None or not new_key:
+                return self._json(400, {"ok": False, "error": "bad fields"})
+            ok, msg = self._run_action(
+                ["editsession", sel_start, sel_dur, sel_key,
+                 new_start, new_end, new_key, text("plan"), text("recap")])
+        else:
+            return self._deny(404)
+
+        return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def existing_server():
+    """(port, token) of an already-running dashboard, if it still answers."""
+    try:
+        with open(HANDOFF_FILE, encoding="utf-8") as f:
+            port, token = f.read().split()
+    except (OSError, ValueError):
+        return None
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/data?t={token}")
+        with urllib.request.urlopen(req, timeout=0.6) as resp:
+            if resp.status == 200:
+                return port, token
+    except Exception:
+        return None
+    return None
+
+
+def open_browser(url):
+    # subprocess with an argv list, never a shell string: the URL must never be
+    # word-split or interpreted by a shell, whatever ends up in it.
+    subprocess.run(["/usr/bin/open", url], check=False)
+
+
+def idle_reaper(httpd):
+    while True:
+        time.sleep(15)
+        if time.time() - _last_request > IDLE_TIMEOUT:
+            httpd.shutdown()
+            return
+
+
+def main(page="/"):
+    existing = existing_server()
+    if existing:
+        # Already running (e.g. "time dashboard" invoked twice) — just refocus,
+        # on whichever page this launch asked for.
+        port, token = existing
+        open_browser(f"http://127.0.0.1:{port}{page}?t={token}")
+        return
+
+    token = secrets.token_urlsafe(24)
+    Handler.token = token
+
+    httpd = Server(("127.0.0.1", 0), Handler)
+    port = httpd.socket.getsockname()[1]
+
+    old = os.umask(0o077)  # token file is readable only by this user
+    try:
+        with open(HANDOFF_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{port} {token}\n")
+    finally:
+        os.umask(old)
+
+    url = f"http://127.0.0.1:{port}{page}?t={token}"
+    threading.Thread(target=idle_reaper, args=(httpd,), daemon=True).start()
+    open_browser(url)
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            os.remove(HANDOFF_FILE)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    if not os.path.isdir(DATA_DIR):
+        sys.exit(f"No data directory at {DATA_DIR} — run install.sh first.")
+    # "time settings" passes --settings; the path is fixed here and never
+    # comes from user input.
+    main("/settings" if "--settings" in sys.argv[1:] else "/")

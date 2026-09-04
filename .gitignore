@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Build staging left behind by a failed install.sh run
+.prompt-build.*/
+.reminders-build.*/
+.calendar-build.*/
+
+# Data and backups belong in ~/.timetrack, never in the repo. Listed anyway:
+# a stray copy of your log is the one file here you least want published.
+*.tsv
+*.tsv.bak-*
+sessions.tsv
+categories.tsv
+settings.tsv
+state
