@@ -30,6 +30,25 @@ makes `BIN_DIR` the repo and rewrites the bundles to point at the working
 tree, turning a half-finished edit into the live program. Never invoke the
 installers directly. `./dev.sh` exists so you do not have to.
 
+## Where to work
+
+    timetracker       main    — the owner's tree. Leave it alone.
+    timetracker-wip   wip     — yours.
+
+Two checkouts of one repository, via `git worktree`. The point is that
+`./spotlight/install.sh` can be run from the first at any moment without
+regard to what is half-finished in the second: the owner never has to stash
+your work to update their own install.
+
+So do not edit, switch branches in, or commit to the main checkout. Start each
+note from the worktree, branching off main rather than off whatever `wip` was
+last left at:
+
+    cd ../timetracker-wip && git switch -c note/<slug> main
+
+`./dev.sh` installs from whichever tree it is run in, so run it from the
+worktree and the scratch install is your branch, not the owner's.
+
 ## Commands
 
     ./dev.sh install   build or refresh the scratch install
@@ -68,7 +87,7 @@ author. One note is one task.
 1. Read the note. If it is ambiguous in a way that changes the work, ask
    before starting; if it is ambiguous in a way that does not, decide, and say
    which way you decided.
-2. Branch: `git switch -c note/<short-slug>`.
+2. Branch, in the worktree: `git switch -c note/<short-slug> main`.
 3. Change the source. Match the surrounding style — the comments here explain
    *why*, at length, and a patch that skips that reads as foreign.
 4. `./dev.sh install`, then actually exercise the change. A change nobody ran
