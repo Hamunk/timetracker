@@ -293,9 +293,9 @@ if [[ ! -f "$POMO_FILE" ]]; then
         < "$STATE_FILE" 2>/dev/null || true
     case "${hand_state:-}" in
         playing|paused)
-            msg="Spotify is reachable — ${hand_state}."
+            msg="Spotify is reachable, ${hand_state}."
             [[ -n "${hand_track:-}" ]] && msg="$msg"$'\n\n'"${hand_track}"
-            [[ -n "${hand_artist:-}" ]] && msg="$msg — ${hand_artist}"
+            [[ -n "${hand_artist:-}" ]] && msg="$msg, ${hand_artist}"
             ;;
         stopped)
             msg="Spotify is reachable. Nothing is loaded." ;;

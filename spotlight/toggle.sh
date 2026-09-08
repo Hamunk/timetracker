@@ -43,7 +43,7 @@ case "${status:-}" in
                 "$CAT_FILE" | sort -k1,1nr | head -1 | cut -f2)
         fi
         if [[ -z "$recent" ]]; then
-            "$BIN_DIR/notify.sh" "No categories yet — use \"time new\" to create one"
+            "$BIN_DIR/notify.sh" "No categories yet. Use \"${TIMETRACK_VERB:-time} new\" to create one"
         else
             # Same flow as a category app, prompts included.
             exec "$BIN_DIR/start.sh" "$recent"

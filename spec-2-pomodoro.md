@@ -1,4 +1,4 @@
-# Spec 2 — Pomodoro mode
+# Spec 2. Pomodoro mode
 
 **Read `README.md` first.** Builds on **Spec 1** (`spec-1-settings.md`):
 all durations below come from `tt_setting` in `settings.sh`. If Spec 1 isn't
@@ -6,14 +6,14 @@ merged yet, hardcode its defaults behind the same function name and note it.
 
 **Core invariants to preserve** (these are the project's soul):
 - All writes to state/log go through `action.sh`. Pomodoro adds **no new
-  timer verbs** — the course timer runs continuously through the whole
+  timer verbs**; the course timer runs continuously through the whole
   cycle, breaks included.
 - A dialog or overlay must never block, delay, or corrupt the underlying
   timer. Killing any pomodoro process at any moment leaves the log valid.
 - The log stays a flat list of closed intervals: **one work block with N
   pomodoros is still one row.** Breaks are part of the logged time.
 
-## Design decisions (settled — do not re-litigate)
+## Design decisions (settled; do not re-litigate)
 
 - **Breaks count as category time.** The timer never pauses; a 4-pomodoro
   block is one `sessions.tsv` row.
@@ -36,7 +36,7 @@ Opting in at start runs a **silent** work session (default 25 min). When it
 elapses, a huge unmissable tomato fills the screen:
 
 1. **Accept break** (default; Enter; 60s no-input timeout): overlay switches
-   to break mode — tomato + live countdown. At the scheduled end a sound
+   to break mode; tomato + live countdown. At the scheduled end a sound
    plays (if `sound` is `on`) and the overlay flips to a prominent
    **"Back to work"** state; clicking it (or Enter) starts the next silent
    work session. Time past the scheduled end is accumulated as break
@@ -56,7 +56,7 @@ Delete the verbs and every trace of the PAUSED state:
 - `dashboard.py`: any PAUSED rendering.
 - `README.md`: the "verbs still exist in action.sh" paragraph and the
   PAUSED example under "Data model → state", plus every other mention.
-- `sync-apps.sh` already retires old pause/resume apps — leave that list
+- `sync-apps.sh` already retires old pause/resume apps; leave that list
   as is (it cleans up old installs).
 
 The `state` file keeps its 4-field format; `PAUSED` simply never occurs and
@@ -72,7 +72,7 @@ is treated as corrupt if encountered.
 | `break_overrun_sec` | empty = mode off; integer = total seconds breaks ran past their scheduled length in this row (0 = none) |
 
 - Extend `SESS_HEADER` in `action.sh`. Existing files keep working: readers
-  already tolerate rows shorter than the header (established convention —
+  already tolerate rows shorter than the header (established convention , 
   see README on `plan`/`recap`). At install, if the existing file's header
   line matches the old header exactly, rewrite that one line to the new
   header.
@@ -100,14 +100,14 @@ timer has already started when the prompt shows).
   stdout of an `open`ed app isn't capturable. `start.sh` launches it with
   `open -W`.
 - The recap prompt ("what did you work on?") in `start.sh`/`toggle.sh` may
-  either keep using `prompt.sh` or use prompt mode without the checkbox —
+  either keep using `prompt.sh` or use prompt mode without the checkbox , 
   builder's choice; visual consistency is nice but not required.
 - `newcat.sh` keeps its existing prompts.
 - Fallback: if the compiled helper is missing (no `swiftc` at install),
   `start.sh` falls back to `prompt.sh` with a third button
   `{Skip, Save, Save 🍅}` so pomodoro remains reachable.
-  **Built, then removed — see the note at the end of this spec.**
-- Calendar auto-starts never prompt and are therefore never pomodoro —
+  **Built, then removed; see the note at the end of this spec.**
+- Calendar auto-starts never prompt and are therefore never pomodoro , 
   correct, leave as is.
 
 The first work session is measured from the timer's start (`pressed_at`),
@@ -123,7 +123,7 @@ WORK	BØK2100	1787225000	1787226500	2	140	48123
 ```
 
 `phase` ∈ `WORK` | `BREAK`. `seg_start` ties the cycle to one specific
-timer segment — it's how `action.sh` matches at close. `target_epoch` is
+timer segment; it's how `action.sh` matches at close. `target_epoch` is
 the current phase's scheduled end. `overrun_sec` accumulates across all
 breaks in the cycle. Created when armed, deleted by `action.sh` at segment
 close or by the watcher on cancel. Written atomically (mktemp + mv). A line
@@ -140,10 +140,10 @@ reconcile:
 |---|---|---|
 | any | RUNNING, same key, same seg_start | continue below |
 | any | anything else (stopped, switched, new seg_start) | **cancel**: delete `pomodoro` (unless action.sh already consumed it), exit silently |
-| WORK | `now >= target_epoch` | fire the tomato — even if long overdue (lid was closed mid-work: the tomato simply appears at wake) |
+| WORK | `now >= target_epoch` | fire the tomato; even if long overdue (lid was closed mid-work: the tomato simply appears at wake) |
 | BREAK | `now >= target_epoch` | break-over nudge: play sound once, flip overlay to "Back to work" state; keep waiting for the user |
 
-Short sleeps + wall-clock comparison, **never** one long `sleep` — macOS
+Short sleeps + wall-clock comparison, **never** one long `sleep`; macOS
 suspends sleeping processes across system sleep, wall-clock math survives
 it. **There is no overdue-cancellation and no timeout on an overrunning
 break**: sleep and long breaks are normal life; the 8h guard is the only
@@ -168,30 +168,30 @@ the watcher relaunches it on the next tick.
 A second compiled Swift helper, following the calendar helper's precedent
 (`ttcal.swift`: compiled by the install script, ad-hoc signed so
 permissions/quirks survive rebuilds). Mode is chosen by argument. It always
-exits after writing its result file — LaunchServices refuses to relaunch a
+exits after writing its result file. LaunchServices refuses to relaunch a
 running app.
 
-- **prompt mode** — the start prompt with checkbox, described above. A
+- **prompt mode**; the start prompt with checkbox, described above. A
   normal small centred window, activated to front.
-- **tomato mode** — borderless full-screen `NSPanel` on the main screen at
+- **tomato mode**; borderless full-screen `NSPanel` on the main screen at
   `.screenSaver` window level, activated to front: genuinely unmissable.
   Content is a `WKWebView` loading a **bundled local `tomato.html`** (no
   network): huge tomato, three buttons (Accept break / Snooze / Skip
   break). Buttons post to Swift via `WKScriptMessageHandler`; the choice is
   written to `$DATA_DIR/.tomato-choice` atomically. Enter = accept,
   Esc = snooze, 60s no input = accept.
-- **break mode** — same full-screen panel: tomato + live countdown +
+- **break mode**; same full-screen panel: tomato + live countdown +
   a "Back to work early" button. At scheduled end (passed as an argument)
   it flips to the break-over state: prominent **"Back to work"** button,
   overrun counting up. Enter or click writes `back-to-work` and exits.
-  **No timeout — it waits.** If the user closes/quits it, the watcher
+  **No timeout; it waits.** If the user closes/quits it, the watcher
   relaunches it next tick, so it also survives sleep, login, or a crash.
-- **Explosion (skip)** must land — tomato swells briefly (anticipation),
+- **Explosion (skip)** must land; tomato swells briefly (anticipation),
   bursts into ~20–40 physics-ish particles (chunks, seeds, juice splatter)
   with gravity and fade, ~0.8–1.2s, then the window closes itself. CSS
   transforms + a spot of JS in `tomato.html`; no libraries.
 - Sound via `afplay` of a system sound (e.g.
-  `/System/Library/Sounds/Glass.aiff`), gated on `tt_setting sound` — play
+  `/System/Library/Sounds/Glass.aiff`), gated on `tt_setting sound`; play
   from the watcher, not the helper, so the sound logic lives in one place.
 - Pass `TIMETRACK_DIR` through like the generated bundles do. The helper
   writes nothing except its two result files in `$DATA_DIR` (mirror the
@@ -214,12 +214,12 @@ Pomodoro is **in scope** for the dashboard:
 ## Install / uninstall / docs
 
 - `install.sh`: copy the new scripts + `tomato.html`; compile the helper
-  (skip gracefully with a message if `swiftc` is missing — the prompt then
+  (skip gracefully with a message if `swiftc` is missing; the prompt then
   falls back to the 3-button AppleScript and the tomato degrades to
   notifications, **since removed**); perform the one-line sessions header
   upgrade.
 - `uninstall.sh`: remove them; kill a live watcher.
-- No new launcher app — pomodoro is reached from the start prompt.
+- No new launcher app; pomodoro is reached from the start prompt.
 - `README.md`: document the checkbox, the cycle, the two new columns, the
   break-ends-when-you-end-it rule, and remove all pause/resume material.
 
@@ -236,7 +236,7 @@ Pomodoro is **in scope** for the dashboard:
   arming a new cycle replaces it. Nothing crashes.
 - Autoclose (8h guard) during a cycle: `close_segment` flushes the counts
   like any close; watcher cancels on next tick.
-- Row edited in the dashboard mid-cycle: unrelated rows — no interaction.
+- Row edited in the dashboard mid-cycle: unrelated rows; no interaction.
   The live segment can't be edited (existing rule).
 
 ## Acceptance criteria
@@ -246,7 +246,7 @@ Test in a sandbox with `setconf pomodoro_minutes 1`, `break_minutes 1`,
 
 1. Starting a course shows the Swift prompt with a working checkbox under
    the text field; Esc/timeout/Skip start the timer with pomodoro off and
-   an empty plan — timings per the README's "a dialog can never block a
+   an empty plan; timings per the README's "a dialog can never block a
    timer" rules.
 2. With the checkbox on: after 1 min the tomato fills the screen. Enter
    accepts; break countdown shows; at 1 min the sound plays and the overlay
@@ -288,16 +288,16 @@ checkbox state" setting; pomodoro statistics/aggregates beyond the columns.
 ## Amendment: the no-`swiftc` fallbacks were removed
 
 Both were built as specified above and both are gone. They were not a smaller
-version of pomodoro mode; they were a different feature wearing its name —
+version of pomodoro mode; they were a different feature wearing its name , 
 the tomato never appeared, breaks advanced on their own, and overrun was
-never measured — reachable only on machines where nobody would ever exercise
+never measured; reachable only on machines where nobody would ever exercise
 them. (One such path had been spinning a shell loop at 100% CPU for the
 length of every break, unnoticed, which is the argument in miniature.)
 
 What replaced them: the checkbox is not offered without the helper, and a
 cycle that finds itself running without one plays its sound, says
 "Pomodoro needs the Xcode tools", drops `~/.timetrack/pomodoro` and exits.
-That last part is not hypothetical — XProtect once deleted the helper binary
+That last part is not hypothetical. XProtect once deleted the helper binary
 seconds after launch (see the header of `ttprompt.swift`).
 
 Unchanged by any of this: the tracker, the log, the plan and recap prompts,

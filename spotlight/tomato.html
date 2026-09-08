@@ -825,8 +825,8 @@ function paintPlaylists(){
     const e=document.createElement("div");
     e.className="plempty";
     e.textContent=work
-      ? "Only the work playlist is set up. Add break playlists in “time settings”."
-      : "No playlists yet — add them in “time settings”.";
+      ? "Only the work playlist is set up. Add break playlists in Settings."
+      : "No playlists yet. Add them in Settings.";
     list.appendChild(e);
   }
   $("plcount").textContent=n?String(n):"";
@@ -944,9 +944,9 @@ function paintNote(){
       noteStatus("Saved to "+(r.detail||list),"ok");
       setTimeout(()=>{if(!M.noteBusy&&M.view==="note")noteIdle();},3000);
     }else if(r.status==="denied"){
-      noteStatus("Reminders access refused — allow it under Privacy & Security","bad");
+      noteStatus("Reminders access refused. Allow it under Privacy & Security","bad");
     }else{
-      noteStatus("Couldn’t save"+(r.detail?" — "+r.detail:""),"bad");
+      noteStatus("Could not save"+(r.detail?": "+r.detail:""),"bad");
     }
     // Consumed: the verdict must not still be sitting there next break.
     mpost("note.clear");
@@ -955,7 +955,7 @@ function paintNote(){
     // The helper never answered. Say so rather than spin for ever — the draft
     // is still in the box, which is the part that matters.
     M.noteBusy=false;
-    noteStatus("No answer from Reminders — the note is still here","bad");
+    noteStatus("No answer from Reminders. The note is still here","bad");
     noteSync();
   }
 }

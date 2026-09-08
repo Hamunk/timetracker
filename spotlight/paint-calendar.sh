@@ -48,7 +48,7 @@ HELPER="$APPS_DIR/TimeTracker Calendar.app"
 mode="${1:-}"
 say() { [[ "$mode" == "--quiet" ]] || printf '%s\n' "$1"; }
 
-[[ -d "$HELPER" ]] || { say "Calendar helper not installed — re-run install.sh"; exit 1; }
+[[ -d "$HELPER" ]] || { say "Calendar helper not installed. Re-run install.sh"; exit 1; }
 
 # --- listing -----------------------------------------------------------------
 # No request file, so the helper dumps what it can see and touches nothing.
@@ -100,7 +100,7 @@ trap 'rm -rf "$PAINT_LOCK" 2>/dev/null' EXIT INT TERM
 cal=""
 [[ -r "$CAL_FILE" ]] && cal=$(head -1 "$CAL_FILE" 2>/dev/null | tr -d '\t\r')
 if [[ -z "$cal" ]]; then
-    say "No calendar chosen yet — pick one in \"time settings\"."
+    say "No calendar chosen yet. Pick one in \"${TIMETRACK_VERB:-time} settings\"."
     exit 1
 fi
 
@@ -226,10 +226,10 @@ case "${status:-}" in
     ok)
         # It worked, so from here on the calendar is ours to reconcile freely.
         printf '%s\n' "$cal" > "$ADOPTED_FILE"
-        say "Painted “${f2}” — ${f3:-0} added, ${f4:-0} updated, ${f5:-0} removed."
+        say "Wrote to “${f2}”: ${f3:-0} added, ${f4:-0} updated, ${f5:-0} removed."
         ;;
     notempty)
-        say "“${f2}” already has ${f3:-some} event(s) in the last ${days} days that TimeTracker did not put there, so nothing was touched. Painting rewrites its whole window — give it an empty calendar of its own."
+        say "“${f2}” already has ${f3:-some} event(s) in the last ${days} days that TimeTracker did not put there, so nothing was touched. Writing rewrites the whole window; give it an empty calendar of its own."
         exit 1
         ;;
     denied)
@@ -241,7 +241,7 @@ case "${status:-}" in
         exit 1
         ;;
     error)
-        say "Could not paint — ${f2:-unknown error}"
+        say "Could not write to the calendar: ${f2:-unknown error}"
         exit 1
         ;;
     *)

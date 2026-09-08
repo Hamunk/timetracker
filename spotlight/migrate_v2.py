@@ -156,7 +156,7 @@ def main():
     touched = 0
     seed = SEED if not cats else []
     if cats:
-        print("categories present — skipping the example seed")
+        print("categories present. Skipping the example seed")
     for key, name, keywords in seed:
         if key in retired and key not in cats:
             continue

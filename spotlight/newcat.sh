@@ -37,13 +37,13 @@ end run
 APPLESCRIPT
 }
 
-key=$(ask "Course code (e.g. BØK2100), or a short key for non-course work:" "")
+key=$(ask "Key: a course code like TDT4100, or any short name. This is what the log stores." "")
 [[ "$key" == "««CANCEL»»" || -z "$key" ]] && exit 0
 
-name=$(ask "Official course name for $key:" "")
+name=$(ask "Name for $key (optional):" "")
 [[ "$name" == "««CANCEL»»" ]] && exit 0
 
-keywords=$(ask "Keywords you'd actually search by, comma separated (e.g. økstyr2, økstyr):" "")
+keywords=$(ask "Keywords to find it by, comma separated (optional):" "")
 [[ "$keywords" == "««CANCEL»»" ]] && keywords=""
 
 msg=$("$BIN_DIR/action.sh" addcat "$key" "$name" "$keywords")

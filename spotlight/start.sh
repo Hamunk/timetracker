@@ -50,7 +50,7 @@ recap=""
 if [[ "${status:-}" == "RUNNING" && -n "${cur_key:-}" && "$cur_key" != "$key" ]]; then
     sub=""
     [[ -n "${cur_plan:-}" ]] && sub="You planned: $cur_plan"
-    recap=$("$BIN_DIR/prompt.sh" "Wrapping up $cur_key — what did you work on?" "$sub")
+    recap=$("$BIN_DIR/prompt.sh" "Wrapping up $cur_key. What did you work on?" "$sub")
 fi
 
 msg=$("$BIN_DIR/action.sh" "start:$key" "" "$recap" "$pressed_at")
@@ -79,7 +79,7 @@ flagged=""
 if [[ -x "$PROMPT_APP/Contents/MacOS/ttprompt" ]]; then
     rm -f "$ANSWER_FILE"
     /usr/bin/open -W "$PROMPT_APP" --args prompt \
-        "What are you planning to work on?" "$key — optional" "$ANSWER_FILE" \
+        "What are you planning to work on?" "$key (optional)" "$ANSWER_FILE" \
         "$ticked" 2>/dev/null || true
     if [[ -f "$ANSWER_FILE" ]]; then
         IFS= read -r flagged < "$ANSWER_FILE" || true
@@ -87,7 +87,7 @@ if [[ -x "$PROMPT_APP/Contents/MacOS/ttprompt" ]]; then
     fi
 else
     flagged=$("$BIN_DIR/prompt.sh" \
-        "What are you planning to work on?" "$key — optional")
+        "What are you planning to work on?" "$key (optional)")
 fi
 
 pomodoro=0

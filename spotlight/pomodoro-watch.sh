@@ -522,7 +522,7 @@ while :; do
     if [[ ! -x "$HELPER_BIN" ]]; then
         play_sound
         "$BIN_DIR/notify.sh" \
-            "🍅 Pomodoro needs the Xcode tools — xcode-select --install" || true
+            "Pomodoro needs the Xcode tools: xcode-select --install" || true
         : > "$STOP_FILE"
         menu_end
         rm -f "$POMO_FILE" "$CHOICE_FILE" "$AUDIO_FILE"

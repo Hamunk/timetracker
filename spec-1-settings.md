@@ -1,4 +1,4 @@
-# Spec 1 — Settings infrastructure + `time settings` app
+# Spec 1. Settings infrastructure + `time settings` app
 
 **Read `README.md` and `SECURITY.md` first.** This spec adds a settings file,
 a validated write path, a reader helper, and a `time settings` launcher app.
@@ -45,7 +45,7 @@ Rules:
 action.sh setconf <key> <value>
 ```
 
-- Runs under the existing lock like every other verb (it already will —
+- Runs under the existing lock like every other verb (it already will , 
   the lock is taken unconditionally at the top).
 - Rejects unknown keys and out-of-range values with a clear message and
   `action_rc=1`. `value` goes through `sanitize_field`.
@@ -63,7 +63,7 @@ from the main page):
   `sound`. Show the valid range next to each field. Current values come from
   the same defaults logic as `tt_setting` (missing → default shown).
 - Saving POSTs to a new endpoint (e.g. `/api/setconf`) that shells out to
-  `action.sh setconf` per changed key — exactly like the existing edit/delete
+  `action.sh setconf` per changed key; exactly like the existing edit/delete
   endpoints. Reuse the same protections: POST-only, token in the custom
   header, JSON content type, `Origin` check. Surface `action.sh`'s message
   on rejection.
@@ -73,11 +73,11 @@ from the main page):
 
 In `sync-apps.sh`, add a fixed control app **`time settings`** (bundle-id
 suffix `settings`) next to the existing ones. It starts the dashboard exactly
-the way `time dashboard` does (reuse the same detached-`nohup` body — the
+the way `time dashboard` does (reuse the same detached-`nohup` body; the
 server already reuses an existing instance) but opens the browser at the
 settings page. The cleanest mechanism: pass an argument or env var through to
 `dashboard.py` telling it which path to open. The app must exit immediately
-(LaunchServices relaunch rule — see README).
+(LaunchServices relaunch rule; see README).
 
 ## Documentation
 
@@ -86,7 +86,7 @@ the file location and format, and the defaults table.
 
 ## Acceptance criteria
 
-Verify in a sandbox (`TIMETRACK_DIR`/`TIMETRACK_APPS_DIR` set — see
+Verify in a sandbox (`TIMETRACK_DIR`/`TIMETRACK_APPS_DIR` set; see
 "Verification" in README):
 
 1. With no `settings.tsv`, `tt_setting pomodoro_minutes` prints `25`; every
@@ -107,5 +107,5 @@ Verify in a sandbox (`TIMETRACK_DIR`/`TIMETRACK_APPS_DIR` set — see
 
 ## Non-goals
 
-Any pomodoro behaviour (timers, tomato UI, watcher) — that is Spec 2, which
+Any pomodoro behaviour (timers, tomato UI, watcher); that is Spec 2, which
 consumes `tt_setting`.
