@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# The scratch install: everything the real one has, and no way to reach it.
+# The scratch install: everything the real one has, and one named way to
+# reach the real one.
 #
-#   ./dev.sh install   build or refresh it
-#   ./dev.sh remove    tear it down  (--purge-data to drop its log too)
-#   ./dev.sh status    what is installed and what is running, both sides
-#   ./dev.sh seed      copy your categories — never your log — into it
-#   ./dev.sh env       the four exports, for `eval "$(./dev.sh env)"`
+#   ./dev.sh install        build or refresh the scratch install
+#   ./dev.sh remove         tear it down  (--purge-data to drop its log too)
+#   ./dev.sh status         what is installed and what is running, both sides
+#   ./dev.sh seed           copy your categories — never your log — into it
+#   ./dev.sh env            the four exports, for `eval "$(./dev.sh env)"`
+#   ./dev.sh install-real   install this tree to the real side, if nothing is live
 #
 # Four things have to be separate before two installs can coexist, and three
 # of them are not the data:
@@ -92,6 +94,47 @@ cmd_remove() {
     "$ROOT/spotlight/uninstall.sh" "${1:-}"
 }
 
+# The one path from this script to the real install, named for what it does.
+# Two guards. It refuses while a session or a cycle is live: the installer
+# overwrites the scripts a running watcher is executing and replaces the
+# bundle a running overlay is drawn from, and a break interrupted by its own
+# tool is the one failure this whole arrangement exists to prevent. And it
+# keeps the identity the installed bundles already have, read off one of
+# them, so the Automation, Reminders and Calendars grants macOS keyed to that
+# identity survive the reinstall. A first install on a fresh machine has no
+# bundles to read and gets the default.
+cmd_install_real() {
+    local live bid prefix="" app
+    if [[ -s "$PROD_DIR/state" ]]; then
+        printf 'Refused: a session is running (%s). Stop it first.\n' \
+            "$(cut -f2 "$PROD_DIR/state" 2>/dev/null)"
+        return 1
+    fi
+    if [[ -f "$PROD_DIR/pomodoro" ]]; then
+        printf 'Refused: a pomodoro cycle is live.\n'
+        return 1
+    fi
+    live=$(running "$PROD_DIR" "$PROD_APPS")
+    case "$live" in
+        *watcher*|*overlay*)
+            printf 'Refused: still running on the real side:%s\n' "$live"
+            return 1 ;;
+    esac
+    for app in "$PROD_APPS"/*.app; do
+        bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            "$app/Contents/Info.plist" 2>/dev/null) || continue
+        case "$bid" in *.toggle) prefix="${bid%.toggle}"; break ;; esac
+    done
+    printf 'Installing %s to the real side\n  data      %s\n  apps      %s\n  identity  %s%s\n\n' \
+        "$ROOT" "$PROD_DIR" "$PROD_APPS" "${prefix:-com.timetracker}" \
+        "${prefix:+   (kept, so the permission grants survive)}"
+    # Every scratch variable this script exported is dropped here, so the
+    # installer sees the real defaults and nothing else.
+    env -u TIMETRACK_DIR -u TIMETRACK_APPS_DIR -u TIMETRACK_VERB \
+        TIMETRACK_BID_PREFIX="${prefix:-com.timetracker}" \
+        "$ROOT/spotlight/install.sh"
+}
+
 running() {
     # Scoped to one install's own copies, the same way uninstall.sh is: a bare
     # name would count the other install's processes as this one's.
@@ -131,10 +174,11 @@ cmd_env() {
 }
 
 case "${1:-status}" in
-    install) cmd_install ;;
-    remove)  cmd_remove "${2:-}" ;;
-    seed)    cmd_seed ;;
-    status)  cmd_status ;;
-    env)     cmd_env ;;
-    *) sed -n '2,10p' "$0"; exit 2 ;;
+    install)      cmd_install ;;
+    install-real) cmd_install_real ;;
+    remove)       cmd_remove "${2:-}" ;;
+    seed)         cmd_seed ;;
+    status)       cmd_status ;;
+    env)          cmd_env ;;
+    *) sed -n '2,11p' "$0"; exit 2 ;;
 esac

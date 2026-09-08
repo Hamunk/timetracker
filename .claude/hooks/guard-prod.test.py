@@ -63,6 +63,12 @@ CASES = [
     (ALLOW, "Bash", "./dev.sh install", "dev.sh install"),
     (ALLOW, "Bash", "./dev.sh remove --purge-data", "dev.sh remove"),
     (ALLOW, "Bash", "./dev.sh status", "dev.sh status"),
+    # The one sanctioned path to the real install. dev.sh itself refuses
+    # while anything is live; the guard's job is only to make sure the
+    # installer is never reached any other way.
+    (ALLOW, "Bash", "./dev.sh install-real", "the named path to the real install"),
+    (ALLOW, "Bash", "cd ../timetracker && ./dev.sh install-real",
+     "the same, from the owner's checkout"),
     (ALLOW, "Bash", '"$HOME/.timetrack-dev/bin/action.sh" start x', "scratch action.sh"),
     (ALLOW, "Bash", "rm -rf ~/.timetrack-dev", "wiping the scratch data"),
     (ALLOW, "Bash", "cat ~/.timetrack-dev/sessions.tsv", "reading the scratch log"),

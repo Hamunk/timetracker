@@ -56,10 +56,11 @@ worktree and the scratch install is your branch, not the owner's.
 
 ## Commands
 
-    ./dev.sh install   build or refresh the scratch install
-    ./dev.sh remove    tear it down
-    ./dev.sh status    both installs, and what is running in each
-    ./dev.sh seed      copy the real categories — never the log — into it
+    ./dev.sh install        build or refresh the scratch install
+    ./dev.sh remove         tear it down
+    ./dev.sh status         both installs, and what is running in each
+    ./dev.sh seed           copy the real categories — never the log — into it
+    ./dev.sh install-real   the real side, only when asked, only when idle
 
 The scratch settings are deliberately fast and quiet: a full work → break →
 long-break cycle runs in well under a minute, with sound, media-pausing,
@@ -105,9 +106,12 @@ author. One note is one task.
    message in the house style — what the change is for, and what went wrong
    without it.
 6. Report: what changed, what you ran to see it work, what you did not cover.
-   Do not merge, and never install to the real side. Those two steps are the
-   owner's, and they are the only two that reach the install being used for
-   real work.
+   Do not merge, and do not install to the real side, unless the owner asks
+   for exactly that. Then, from the owner's checkout, `./dev.sh install-real`:
+   it refuses while a session or a cycle is live and keeps the identifiers
+   the permission grants are keyed to. Those two steps are the only ones that
+   reach the install being used for real work, and neither happens on your
+   own initiative.
 
 When a note has been done and reported, remove it from the inbox. The commit
 is its record; an inbox that still lists finished work is a list nobody can
