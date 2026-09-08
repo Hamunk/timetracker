@@ -555,17 +555,18 @@ border-top:1px solid var(--line);padding-top:11px}
 .edit label.wide,.editfoot{grid-column:span 1}}
 </style></head><body><div class="wrap">
 <h1>TimeTracker</h1>
-<div class="sub">Live — updates while a timer runs. Sessions can be corrected below.
-· <a id="nav-settings" href="#">Settings</a></div>
+<div class="sub">Updates while a timer runs. Sessions can be corrected below.
+&middot; <a id="nav-settings" href="#">Settings</a>
+&middot; <a id="nav-guide" href="#">Guide</a></div>
 <div class="hero"><div class="dot" id="dot"></div>
-<div><div class="who" id="who">—</div><div class="st" id="st"></div>
+<div><div class="who" id="who">&nbsp;</div><div class="st" id="st"></div>
 <div class="pomo" id="pomo" style="display:none"></div></div>
 <div class="clock" id="clock"></div></div>
 <div class="msg" id="msg"></div>
 <div class="cards">
-<div class="card"><div class="k">Today</div><div class="v" id="t-today">—</div></div>
-<div class="card"><div class="k">This week</div><div class="v" id="t-week">—</div></div>
-<div class="card"><div class="k">All time</div><div class="v" id="t-all">—</div></div>
+<div class="card"><div class="k">Today</div><div class="v" id="t-today">&nbsp;</div></div>
+<div class="card"><div class="k">This week</div><div class="v" id="t-week">&nbsp;</div></div>
+<div class="card"><div class="k">All time</div><div class="v" id="t-all">&nbsp;</div></div>
 </div>
 <h2>By category</h2>
 <div class="tw"><table><thead><tr><th>Category</th>
@@ -585,6 +586,7 @@ border-top:1px solid var(--line);padding-top:11px}
 const TOKEN=new URLSearchParams(location.search).get("t")||"";
 const $=i=>document.getElementById(i);
 $("nav-settings").href="/settings?t="+encodeURIComponent(TOKEN);
+$("nav-guide").href="/guide?t="+encodeURIComponent(TOKEN);
 let tick=null,elapsed=0,POMO=null;
 // Rows currently on screen, addressed by a throwaway id the buttons carry.
 let LAST=null,ROWS={},nrow=0,editing=null,msgTimer=null;
@@ -644,7 +646,7 @@ function render(d){
   POMO=d.pomodoro||null;pomoLine();
   if(d.status==="RUNNING"){dot.classList.add("run");
     $("who").textContent=d.category;
-    $("st").textContent=(d.running&&d.running.plan)?("Running — "+d.running.plan):"Running";
+    $("st").textContent=(d.running&&d.running.plan)?("Running: "+d.running.plan):"Running";
     elapsed=d.running.elapsed;$("clock").textContent=clock(elapsed);
     tick=setInterval(()=>{elapsed++;$("clock").textContent=clock(elapsed);pomoLine();},1000);
   }else{$("who").textContent="Idle";$("st").textContent="No timer running";$("clock").textContent="";}
@@ -661,8 +663,8 @@ function render(d){
     '</td><td class="cat">'+esc(r.category)+'</td><td class="n">'+dur(r.dur)+
     (r.pomodoros!==""?'<div class="mut pomotag">🍅×'+esc(r.pomodoros)+
       ((+r.overrun||0)>0?" +"+dur(+r.overrun):"")+"</div>":"")+
-    '</td><td class="note">'+(r.plan?esc(r.plan):'<span class="mut">—</span>')+
-    '</td><td class="note">'+(r.recap?esc(r.recap):'<span class="mut">—</span>')+
+    '</td><td class="note">'+(r.plan?esc(r.plan):'<span class="mut">&nbsp;</span>')+
+    '</td><td class="note">'+(r.recap?esc(r.recap):'<span class="mut">&nbsp;</span>')+
     "</td>"+acts(r,id)+"</tr>";}).join(""):
     '<tr><td colspan="6" class="empty">No sessions yet.</td></tr>';
   if(d.flagged.length){$("flagwrap").style.display="";
@@ -695,7 +697,7 @@ function epochOf(id){const v=$(id).value;
   const t=v?new Date(v).getTime():NaN;
   return Number.isFinite(t)?Math.floor(t/1000):null;}
 function showDur(){const a=epochOf("e-start"),b=epochOf("e-end");
-  $("e-dur").textContent=(a==null||b==null)?"—":
+  $("e-dur").textContent=(a==null||b==null)?"":
     (b<a?"end is before start":"Duration "+dur(b-a));}
 function startEdit(id){
   const r=ROWS[id],tr=document.querySelector('tr[data-row="'+id+'"]');
@@ -730,7 +732,7 @@ async function save(){
 async function del(id){
   const r=ROWS[id];if(!r)return;
   const nl="\\n";
-  if(!confirm("Delete this session?"+nl+nl+r.category+" — "+dur(r.dur)+
+  if(!confirm("Delete this session?"+nl+nl+r.category+", "+dur(r.dur)+
     nl+"Started "+r.start.slice(0,16).replace("T"," ")+nl+nl+
     "It is moved to sessions.deleted.tsv, not shredded."))return;
   const res=await post("/api/session/delete",sel(r));
@@ -754,7 +756,7 @@ document.addEventListener("keydown",e=>{
 async function poll(){try{const r=await fetch("/api/data?t="+encodeURIComponent(TOKEN),
   {cache:"no-store"});
   if(r.ok){const d=await r.json();LAST=d;
-    if(editing){$("foot").textContent="Editing — updates paused";return;}
+    if(editing){$("foot").textContent="Editing; updates paused";return;}
     render(d);}
   else $("foot").textContent="Server rejected request.";}
   catch(e){$("foot").textContent="Dashboard server stopped.";if(tick)clearInterval(tick);}}
@@ -1260,6 +1262,330 @@ setInterval(()=>{if(!BUSY){loadCats();loadBreak();}},__POLL__);
 """
 
 
+SETUP_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>TimeTracker Setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>__CSS__
+.wrap{max-width:600px}
+.step{margin-top:30px}
+.step h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+margin:0 0 4px;font-weight:600}
+.step h2 .n{display:inline-block;width:20px;height:20px;border-radius:50%;
+background:var(--accent);color:#fff;text-align:center;line-height:20px;
+font-size:11px;margin-right:8px;letter-spacing:0}
+.lead{color:var(--mut);font-size:13px;margin:0 0 10px;line-height:1.55}
+.lead b{color:var(--fg)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:2px 20px}
+.panel+.addform{margin-top:8px}
+kbd{display:inline-block;font:inherit;font-size:12px;padding:1px 7px;border-radius:5px;
+border:1px solid var(--line);background:var(--bg)}
+.addform{display:flex;gap:8px;padding:10px 0 4px;flex-wrap:wrap}
+.addform input{flex:1 1 130px;min-width:0;font:inherit;font-size:14px;
+padding:6px 8px;color:var(--fg);background:var(--bg);
+border:1px solid var(--line);border-radius:7px}
+.addform input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.addform .btn{flex:none}
+.crow{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:11px 0;
+border-bottom:1px solid var(--line)}
+.crow:last-child{border-bottom:0}
+.crow .cname{font-weight:600;font-size:14px}
+.crow .hint{color:var(--mut);font-size:12px}
+.row{display:grid;grid-template-columns:1fr 150px;gap:2px 16px;padding:12px 0;
+border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .name{font-weight:600;font-size:14px}
+.row .hint{color:var(--mut);font-size:12px}
+.row input,.row select{grid-column:2;grid-row:1/span 2;align-self:center;
+font:inherit;font-size:14px;padding:6px 8px;width:100%;
+color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:7px}
+.row select{-webkit-appearance:none;appearance:none;padding-right:26px;cursor:pointer;
+background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+background-repeat:no-repeat;background-position:right 9px center;background-size:10px 6px}
+.grow{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:12px 0;
+border-bottom:1px solid var(--line);align-items:center}
+.grow:last-child{border-bottom:0}
+.grow .gname{font-weight:600;font-size:14px}
+.grow .hint{color:var(--mut);font-size:12px;grid-column:1}
+.grow .btn{grid-column:2;grid-row:1/span 2}
+.foot{display:flex;align-items:center;gap:10px;padding:14px 0;margin-top:30px;
+border-top:1px solid var(--line)}
+.foot .spacer{flex:1}
+.empty{padding:16px 0;color:var(--mut);font-size:14px}
+.ok{color:var(--live)}
+</style></head><body><div class="wrap">
+<h1>Welcome to TimeTracker</h1>
+<div class="sub">Five short steps. Everything here can be changed later in
+<a id="nav-settings" href="#">Settings</a>.</div>
+<div class="msg" id="msg"></div>
+
+<div class="step"><h2><span class="n">1</span>How it works</h2>
+<div class="lead">Open your launcher (<kbd>&#8984;</kbd><kbd>Space</kbd> for Spotlight, or
+Alfred), type <b>__VERB__</b> followed by a category, press Enter. The timer starts and
+asks what you plan to do. Type <b>__VERB__</b> on its own to stop, and it asks what you
+did. Both answers are optional. Everything is logged to a text file you can open
+any time with <b>__VERB__ data</b>.</div></div>
+
+<div class="step"><h2><span class="n">2</span>Categories</h2>
+<div class="lead">A category is what you track time against: a course, a project, a
+client. The <b>key</b> is its permanent identity and the only thing the log stores.
+The <b>name</b> and <b>keywords</b> are what you type to find it, and you can change
+them freely later.</div>
+<div class="panel" id="cats"><div class="empty">Loading&hellip;</div></div>
+<div class="addform">
+  <input id="c-key" type="text" placeholder="Key, e.g. TDT4100" maxlength="60">
+  <input id="c-name" type="text" placeholder="Name" maxlength="120">
+  <input id="c-kw" type="text" placeholder="Keywords, comma separated" maxlength="200">
+  <button class="btn primary" id="c-add">Add</button>
+</div></div>
+
+<div class="step"><h2><span class="n">3</span>Pomodoro</h2>
+<div class="lead">With Pomodoro mode on, a full-screen tomato appears after each work
+session and offers a break. Music and video are paused when it appears. You choose
+per session; this sets the starting position of that choice.</div>
+<div class="panel" id="pomo"><div class="empty">Loading&hellip;</div></div>
+<div class="addform"><span class="spacer" style="flex:1"></span>
+  <button class="btn" id="p-save" disabled>Save</button></div></div>
+
+<div class="step"><h2><span class="n">4</span>Permissions</h2>
+<div class="lead">Three optional tools each need one macOS permission. Granting them
+now means no prompt appears in the middle of a break. Each button opens a small
+helper that asks for its permission and reports back; nothing else happens.</div>
+<div class="panel">
+  <div class="grow"><span class="gname">Spotify</span>
+    <button class="btn" data-grant="spotify">Grant</button>
+    <span class="hint">Play your playlists from the break screen. Needs Automation
+    access to Spotify.</span></div>
+  <div class="grow"><span class="gname">Reminders</span>
+    <button class="btn" data-grant="reminders">Grant</button>
+    <span class="hint">Save a note from the break screen into Apple Reminders.</span></div>
+  <div class="grow"><span class="gname">Calendar</span>
+    <button class="btn" data-grant="calendar">Grant</button>
+    <span class="hint">Write your logged sessions onto a calendar of their own.
+    Choose which calendar in Settings afterwards.</span></div>
+</div></div>
+
+<div class="step"><h2><span class="n">5</span>Done</h2>
+<div class="lead">Try it: <kbd>&#8984;</kbd><kbd>Space</kbd>, <b>__VERB__</b>, the name of a
+category, Enter. The guide covers everything else.</div></div>
+
+<div class="foot"><span class="spacer"></span>
+<a class="btn" id="nav-guide" href="#">Read the guide</a>
+<button class="btn primary" id="done">Finish setup</button></div>
+</div><script>
+const TOKEN=new URLSearchParams(location.search).get("t")||"";
+const $=i=>document.getElementById(i);
+$("nav-settings").href="/settings?t="+encodeURIComponent(TOKEN);
+$("nav-guide").href="/guide?t="+encodeURIComponent(TOKEN);
+let msgTimer=null,CUR={};
+function esc(t){const d=document.createElement("div");d.textContent=t==null?"":t;return d.innerHTML;}
+function escA(t){return esc(t).replace(/"/g,"&quot;");}
+function note(text,bad){const m=$("msg");m.textContent=text;
+m.className="msg"+(bad?" bad":"");m.style.display="block";
+if(msgTimer)clearTimeout(msgTimer);
+msgTimer=setTimeout(()=>{m.style.display="none";},bad?8000:4000);}
+async function post(path,body){
+  let j=null;
+  try{
+    const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{
+      method:"POST",cache:"no-store",
+      headers:{"Content-Type":"application/json","X-TimeTracker-Token":TOKEN},
+      body:JSON.stringify(body)});
+    try{j=await r.json();}catch(e){}
+    return {ok:!!(j&&j.ok),msg:(j&&(j.message||j.error))||("HTTP "+r.status)};
+  }catch(e){return {ok:false,msg:"Dashboard server stopped."};}
+}
+// --- categories ---
+async function loadCats(){
+  try{
+    const r=await fetch("/api/categories?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
+    if(!r.ok)return;
+    const d=await r.json(),cs=(d.categories||[]).filter(c=>!c.orphan&&!c.hidden);
+    $("cats").innerHTML=cs.length?cs.map(c=>'<div class="crow"><span class="cname">'+
+      esc(c.label)+'</span><span class="hint">'+esc(c.key)+'</span></div>').join("")
+      :'<div class="empty">No categories yet. Add your first one below.</div>';
+  }catch(e){}
+}
+$("c-add").addEventListener("click",async()=>{
+  const key=$("c-key").value.trim(),name=$("c-name").value.trim(),kw=$("c-kw").value.trim();
+  if(!key){note("A key is required.",true);$("c-key").focus();return;}
+  const b=$("c-add");b.disabled=true;b.textContent="Adding…";
+  const res=await post("/api/category/add",{key,name,keywords:kw});
+  b.disabled=false;b.textContent="Add";
+  note(res.msg,!res.ok);
+  if(res.ok){$("c-key").value="";$("c-name").value="";$("c-kw").value="";$("c-key").focus();loadCats();}
+});
+for(const id of ["c-key","c-name","c-kw"])
+  $(id).addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();$("c-add").click();}});
+// --- pomodoro ---
+const PM={pomodoro_default:["Pomodoro on by default","The tomato is offered unless you untick it"],
+  pomodoro_minutes:["Work session","Minutes"],break_minutes:["Short break","Minutes"]};
+async function loadPomo(){
+  try{
+    const r=await fetch("/api/settings?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
+    if(!r.ok)return;
+    const d=await r.json(),by={};
+    for(const s of d.settings||[])by[s.key]=s;
+    CUR={};
+    $("pomo").innerHTML=Object.keys(PM).filter(k=>by[k]).map(k=>{
+      const s=by[k];CUR[k]=s.value;
+      const field=s.kind==="number"
+        ?'<input type="number" id="f-'+k+'" min="'+s.min+'" max="'+s.max+'" step="'+(s.step||1)+'" value="'+escA(s.value)+'">'
+        :'<select id="f-'+k+'"><option value="on"'+(s.value==="on"?" selected":"")+'>On</option>'+
+         '<option value="off"'+(s.value==="off"?" selected":"")+'>Off</option></select>';
+      return '<div class="row"><span class="name">'+esc(PM[k][0])+'</span>'+field+
+        '<span class="hint">'+esc(PM[k][1])+'</span></div>';
+    }).join("");
+  }catch(e){}
+}
+function pending(){const ch={};for(const k in CUR){const f=$("f-"+k);
+  if(f&&String(f.value)!==CUR[k])ch[k]=String(f.value);}return ch;}
+$("pomo").addEventListener("input",()=>{$("p-save").disabled=!Object.keys(pending()).length;});
+$("pomo").addEventListener("change",()=>{$("p-save").disabled=!Object.keys(pending()).length;});
+$("p-save").addEventListener("click",async()=>{
+  const ch=pending();if(!Object.keys(ch).length)return;
+  const res=await post("/api/setconf",{changes:ch});
+  note(res.msg,!res.ok);
+  if(res.ok){await loadPomo();$("p-save").disabled=true;}
+});
+// --- permissions ---
+document.addEventListener("click",async e=>{
+  const b=e.target.closest("button[data-grant]");if(!b)return;
+  b.disabled=true;b.textContent="Asking…";
+  const res=await post("/api/grant",{tool:b.dataset.grant});
+  note(res.msg,!res.ok);
+  b.disabled=false;b.textContent=res.ok?"Grant again":"Grant";
+});
+// --- done ---
+$("done").addEventListener("click",async()=>{
+  const res=await post("/api/setup/done",{});
+  if(!res.ok){note(res.msg,true);return;}
+  location.href="/guide?t="+encodeURIComponent(TOKEN);
+});
+loadCats();loadPomo();
+</script></body></html>
+"""
+
+GUIDE_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>TimeTracker Guide</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>__CSS__
+.wrap{max-width:640px}
+.toc{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px}
+.toc a{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);
+color:var(--fg);text-decoration:none;background:var(--card)}
+.toc a:hover{border-color:var(--accent);color:var(--accent)}
+section{margin-top:30px;scroll-margin-top:16px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+margin:0 0 8px;font-weight:600}
+p{margin:0 0 10px;line-height:1.55;font-size:14px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:4px 20px;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td{padding:9px 0;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td:first-child{white-space:nowrap;padding-right:18px;width:1%}
+code,kbd{font-family:ui-monospace,Menlo,monospace;font-size:13px}
+kbd{display:inline-block;padding:1px 7px;border-radius:5px;border:1px solid var(--line);
+background:var(--bg)}
+b{font-weight:600}
+</style></head><body><div class="wrap">
+<h1>Guide</h1>
+<div class="sub"><a id="nav-back" href="#">&larr; Dashboard</a> &middot;
+<a id="nav-settings" href="#">Settings</a> &middot; <a id="nav-setup" href="#">Setup</a></div>
+<div class="toc">
+<a href="#g-launcher">Launcher</a><a href="#g-timer">Timer</a><a href="#g-pomodoro">Pomodoro</a>
+<a href="#g-break">Break screen</a><a href="#g-dashboard">Dashboard</a>
+<a href="#g-data">Your data</a><a href="#g-remove">Removing it</a></div>
+
+<section id="g-launcher"><h2>Launcher</h2>
+<p>Every command is typed into Spotlight or Alfred. They all start with
+<b>__VERB__</b>.</p>
+<div class="panel"><table>
+<tr><td><code>__VERB__</code></td><td>Stop the running timer, or start the most recent category if nothing is running.</td></tr>
+<tr><td><code>__VERB__ &lt;category&gt;</code></td><td>Start that category, or switch to it. Type its key, its name, or any of its keywords.</td></tr>
+<tr><td><code>__VERB__ new</code></td><td>Create a category. The timer does not start.</td></tr>
+<tr><td><code>__VERB__ dashboard</code></td><td>Today, this week, all time, and the recent sessions, in your browser.</td></tr>
+<tr><td><code>__VERB__ settings</code></td><td>Durations, keys, Spotify, Reminders, the calendar, and your categories.</td></tr>
+<tr><td><code>__VERB__ guide</code></td><td>This page.</td></tr>
+<tr><td><code>__VERB__ categories</code></td><td>Edit names and keywords in a text editor.</td></tr>
+<tr><td><code>__VERB__ data</code></td><td>Open the folder the log lives in.</td></tr>
+<tr><td><code>__VERB__ spotify</code>, <code>__VERB__ reminders</code>, <code>__VERB__ calendar</code></td>
+<td>Ask for that tool's permission and report what it can see. Nothing is changed.</td></tr>
+</table></div></section>
+
+<section id="g-timer"><h2>Timer</h2>
+<p>Starting asks what you plan to do. Stopping asks what you did. Both answers are
+optional and both are stored with the session. Switching categories stops one session
+and starts the next, with one question for each.</p>
+<p>A timer left running is stopped after eight hours and marked in the dashboard,
+where you can correct its end time. There is no pause: a break is part of the session,
+not an interruption of it.</p></section>
+
+<section id="g-pomodoro"><h2>Pomodoro</h2>
+<p>Tick <b>Pomodoro mode</b> when a session starts. After the work session a tomato
+takes the whole screen and offers a break: <kbd>&crarr;</kbd> takes it,
+<kbd>Esc</kbd> snoozes it, and Skip counts the pomodoro and starts the next work
+session at once. With no answer, the break starts by itself after a minute.</p>
+<p>Every fourth break is long. A break ends when you press <kbd>&crarr;</kbd> or
+<b>I'm back</b>; time past the scheduled end is logged as overrun on that session.
+The number of pomodoros and the overrun appear on the session in the dashboard.</p>
+<p>When the tomato appears, music and video that can be reached are paused. A video
+inside an embedded player may not be reachable; the screen says so and
+<kbd>F8</kbd> pauses it by hand.</p></section>
+
+<section id="g-break"><h2>Break screen</h2>
+<p>A menu sits behind the button in the top left, or behind <kbd>Tab</kbd>. It holds
+two tools, each of which appears only when it is on in Settings and its permission has
+been granted.</p>
+<div class="panel"><table>
+<tr><td><b>Spotify</b></td><td>Your break playlists, transport buttons, and volume. Choosing a
+playlist opens Spotify if it is closed. When the break ends the work playlist starts, if
+you marked one, and otherwise the music is paused. If the break runs over while music you
+started is playing, the music is paused.</td></tr>
+<tr><td><b>Add Reminder</b></td><td>A note that is saved to a list of its own in Apple
+Reminders. <kbd>&#8984;</kbd><kbd>&crarr;</kbd> saves it. A draft survives the break.</td></tr>
+</table></div>
+<p>Inside the menu, <kbd>s</kbd> opens Spotify and <kbd>n</kbd> the note; <kbd>Esc</kbd>
+goes back and a click outside closes it. All three keys can be changed in Settings.</p></section>
+
+<section id="g-dashboard"><h2>Dashboard</h2>
+<p>Totals for today, this week and all time, a table per category, and the recent
+sessions. A session can be edited, to fix an end time you forgot, or deleted. Deleted
+sessions are moved to a file beside the log, not destroyed.</p>
+<p>The dashboard is a small local web page. It runs only while you have it open, listens
+only on this computer, and closes itself after ten idle minutes.</p></section>
+
+<section id="g-data"><h2>Your data</h2>
+<p>Everything is in <code>~/.timetrack</code>, readable only by your user, and every
+file is plain text. Nothing is sent anywhere.</p>
+<div class="panel"><table>
+<tr><td><code>sessions.tsv</code></td><td>The log: start, end, duration, category, plan, recap, pomodoros, overrun.</td></tr>
+<tr><td><code>categories.tsv</code></td><td>Key, name, keywords, last used, hidden.</td></tr>
+<tr><td><code>settings.tsv</code></td><td>Only the settings you changed from the defaults.</td></tr>
+<tr><td><code>spotify-playlists.tsv</code></td><td>Break playlists, and which one is for work.</td></tr>
+<tr><td><code>paint-calendar</code>, <code>reminders-list</code></td><td>The calendar and the Reminders list the two tools write to.</td></tr>
+</table></div>
+<p>The calendar tool rewrites the last fourteen days of the chosen calendar to match the log
+whenever a session changes, so give it an empty calendar of its own.</p></section>
+
+<section id="g-remove"><h2>Removing it</h2>
+<p>Run <code>uninstall.sh</code> from the folder you installed from. It removes the
+launcher entries and the scripts and keeps your log; <code>--purge-data</code> removes
+the log too. The three permissions stay listed in System Settings until you revoke them
+there.</p></section>
+</div><script>
+const TOKEN=new URLSearchParams(location.search).get("t")||"";
+const $=i=>document.getElementById(i);
+$("nav-back").href="/?t="+encodeURIComponent(TOKEN);
+$("nav-settings").href="/settings?t="+encodeURIComponent(TOKEN);
+$("nav-setup").href="/setup?t="+encodeURIComponent(TOKEN);
+</script></body></html>
+"""
+
+
 # --------------------------------------------------------------------------
 # server
 # --------------------------------------------------------------------------
@@ -1312,6 +1638,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/settings":
             body = (SETTINGS_PAGE.replace("__CSS__", THEME_CSS)
                     .replace("__POLL__", str(POLL_MS))
+                    .replace("__VERB__", VERB).encode("utf-8"))
+            ctype = "text/html; charset=utf-8"
+        elif parsed.path in ("/setup", "/guide"):
+            page = SETUP_PAGE if parsed.path == "/setup" else GUIDE_PAGE
+            body = (page.replace("__CSS__", THEME_CSS)
                     .replace("__VERB__", VERB).encode("utf-8"))
             ctype = "text/html; charset=utf-8"
         elif parsed.path == "/api/data":
@@ -1403,9 +1734,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             proc = subprocess.run([SYNC_APPS], capture_output=True, text=True,
                                   errors="replace", timeout=120)
         except (OSError, subprocess.SubprocessError):
-            return "launcher not rebuilt — run sync-apps.sh by hand"
+            return "launcher not rebuilt; run sync-apps.sh by hand"
         if proc.returncode != 0:
-            return "launcher may be stale — run sync-apps.sh by hand"
+            return "launcher may be stale; run sync-apps.sh by hand"
         return ""
 
     def do_POST(self):
@@ -1461,7 +1792,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not ok:
                     return self._json(409, {"ok": False, "message": msg})
                 msgs.append(msg)
-            return self._json(200, {"ok": True, "message": " — ".join(msgs)})
+            return self._json(200, {"ok": True, "message": ". ".join(msgs)})
+
+        if parsed.path == "/api/category/add":
+            # The setup page's way of making a category; "time new" is the
+            # other. Same writer, then the same rebuild of the launcher.
+            cat_key = text("key", 60)
+            if not cat_key:
+                return self._json(400, {"ok": False, "error": "bad fields"})
+            ok, msg = self._run_action(
+                ["addcat", cat_key, text("name", 120), text("keywords", 200)])
+            if ok:
+                warn = self._sync_apps()
+                if warn:
+                    msg = f"{msg}. {warn}"
+            return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+        if parsed.path == "/api/setup/done":
+            ok, msg = self._run_action(["setupdone"])
+            return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+        if parsed.path == "/api/grant":
+            # Opens the launcher verb for one of the three tools, which is
+            # exactly what typing it would do: the helper asks macOS for its
+            # permission and reports back in a dialog. The bundle name is
+            # built from a fixed list; nothing from the request is a path.
+            tool = text("tool", 20)
+            if tool not in ("spotify", "reminders", "calendar"):
+                return self._json(400, {"ok": False, "error": "bad tool"})
+            bundle = os.path.join(APPS_DIR, f"{VERB} {tool}.app")
+            if not os.path.isdir(bundle):
+                return self._json(409, {"ok": False,
+                                        "message": f"The {tool} helper is not installed."})
+            try:
+                subprocess.run(["/usr/bin/open", "-g", bundle], check=False,
+                               timeout=20)
+            except (OSError, subprocess.SubprocessError):
+                return self._json(409, {"ok": False,
+                                        "message": f"Could not open the {tool} helper."})
+            return self._json(200, {"ok": True,
+                                    "message": "Asked. Answer the macOS prompt if one appears."})
 
         if parsed.path == "/api/paint/refresh":
             # Runs the helper so it can re-dump the calendar list — and, the
@@ -1533,7 +1903,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if ok:
                 warn = self._sync_apps()
                 if warn:
-                    msg = f"{msg} — {warn}"
+                    msg = f"{msg}. {warn}"
             return self._json(200 if ok else 409, {"ok": ok, "message": msg})
 
         sel_start, sel_key = text("start", 40), text("key", 120)
@@ -1633,9 +2003,28 @@ def main(page="/"):
             pass
 
 
+def first_run():
+    """No setup marker and no categories: nothing has been set up yet.
+
+    Either one ends it. Finishing the setup page writes the marker; making a
+    category any other way means the person found their way without it, and
+    the page must not keep appearing in front of someone who did.
+    """
+    return not os.path.exists(SETUP_DONE_FILE) and not read_categories()
+
+
 if __name__ == "__main__":
     if not os.path.isdir(DATA_DIR):
-        sys.exit(f"No data directory at {DATA_DIR} — run install.sh first.")
-    # "time settings" passes --settings; the path is fixed here and never
+        sys.exit(f"No data directory at {DATA_DIR}. Run install.sh first.")
+    # The launcher verbs pass one of these; the path is fixed here and never
     # comes from user input.
-    main("/settings" if "--settings" in sys.argv[1:] else "/")
+    args = sys.argv[1:]
+    if "--settings" in args:
+        start = "/settings"
+    elif "--guide" in args:
+        start = "/guide"
+    elif "--setup" in args:
+        start = "/setup"
+    else:
+        start = "/setup" if first_run() else "/"
+    main(start)

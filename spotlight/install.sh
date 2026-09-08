@@ -301,8 +301,8 @@ EOF
         rm -rf "$CSTAGE"
     fi
 else
-    printf 'swiftc not found — the tracker is fully installed, but pomodoro\n'
-    printf 'mode needs the compiled helper and will not be offered.\n'
+    printf 'swiftc not found. The tracker is installed; pomodoro mode needs\n'
+    printf 'the compiled helper and is not offered without it.\n'
     printf 'To enable it: xcode-select --install, then re-run this script.\n'
 fi
 
@@ -323,31 +323,22 @@ cat <<EOF
 Installed.
 
   scripts:  $BIN_DIR
-  apps:     ${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}
+  apps:     $APPS_DIR
 
-Try it:  Cmd+Space  ->  "$VERB new"  ->  Enter
-
-The pomodoro break menu has two tools, and each needs one permission that is
-much better answered now than in the middle of a break — an unanswered prompt
-blocks the thing that raised it:
-
-  Cmd+Space  ->  "$VERB spotify"    ->  Enter     (Automation: Spotify)
-  Cmd+Space  ->  "$VERB reminders"  ->  Enter     (Privacy: Reminders)
-  Cmd+Space  ->  "$VERB calendar"   ->  Enter     (Privacy: Calendars)
-
-All three report what they found and change nothing. Then open Settings to add
-your break playlists, pick the one you keep for work, and choose the calendar
-your tracked sessions get painted onto:
-
-  Cmd+Space  ->  "$VERB settings"   ->  Enter
-
-Give painting an empty calendar of its own: everything in it inside the last
-two weeks is rewritten to match the log, every time a session closes. To have
-it sync to your phone and toggle on and off like any other, create it in
-Google Calendar (Other calendars > +), tick it at
-
-  https://calendar.google.com/calendar/syncselect
-
-and it will appear here for you to choose. Google's CalDAV cannot create
-calendars, which is why that one step has to be yours.
+  Cmd+Space, "$VERB guide", Enter    the guide
+  Cmd+Space, "$VERB settings", Enter  the settings
 EOF
+
+# First run: no setup marker and no categories. Open the setup page, which
+# walks through categories, the pomodoro choice and the three permissions.
+# Through the dashboard bundle rather than dashboard.py directly, so the
+# browser tab it opens is attributed to the same app as every other time.
+first_run=0
+[[ -f "$DATA_DIR/.setup-done" ]] || first_run=1
+if (( first_run )) && [[ "$(awk 'NR>1 && NF' "$DATA_DIR/categories.tsv" | wc -l)" -gt 0 ]]; then
+    first_run=0
+fi
+if (( first_run )) && [[ -d "$APPS_DIR/$VERB dashboard.app" ]]; then
+    printf '\nOpening the setup page in your browser.\n'
+    /usr/bin/open -g "$APPS_DIR/$VERB dashboard.app" >/dev/null 2>&1 || true
+fi
