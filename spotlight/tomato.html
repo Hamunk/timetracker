@@ -954,7 +954,7 @@ const SHOP=[
   {k:"orb",  e:"🚀", n:"Orbital greenhouse", c:1100000, ps:1800}
 ];
 const SAVE="tt-tomato-clicker";
-const G={on:false,n:0,earned:0,ps:0,click:1,own:{},parts:[],
+const G={on:false,n:0,earned:0,clicks:0,ps:0,click:1,own:{},parts:[],
   raf:0,last:0,s:0,sv:0,gold:null,goldAt:0,saveAt:0,shopAt:0,
   away:0,awaySecs:0,day:null,
   at:Date.now()/1000};   // wall clock through which growth has been paid
@@ -988,7 +988,7 @@ function hsave(){try{localStorage.setItem(HSAVE,JSON.stringify(HIST));}catch(e){
 // exact same thing.
 function rollDay(day){
   if(G.earned>0){HIST[day]=Math.max(HIST[day]||0,Math.floor(G.earned));hsave();recalcBest();}
-  G.n=0;G.earned=0;G.own={};G.click=1;recalc();
+  G.n=0;G.earned=0;G.clicks=0;G.own={};G.click=1;recalc();
 }
 
 // Growth is owed for elapsed time, not for frames drawn. Nothing of ours
@@ -1030,6 +1030,10 @@ function gload(){
     return;
   }
   G.n=r.n;G.earned=r.earned||r.n;G.own=r.own||{};
+  // Absent from every save written before the corner counted clicks, and a
+  // day already under way is not worth reconstructing: it starts at nought
+  // and is right again at the next midnight.
+  G.clicks=r.clicks||0;
   G.day=r.day||dayKey(r.at||Date.now()/1000);
   recalc();
   // A save with no timestamp predates all this and owes nothing; reading its
@@ -1041,7 +1045,7 @@ function gload(){
 }
 function gsave(){try{
   localStorage.setItem(SAVE,JSON.stringify(
-    {n:G.n,earned:G.earned,own:G.own,at:G.at,day:G.day}));
+    {n:G.n,earned:G.earned,clicks:G.clicks,own:G.own,at:G.at,day:G.day}));
 }catch(e){}}
 
 // Manual version of the same rollover: banks today's run as today's score
@@ -1118,7 +1122,7 @@ function stepParts(dt){
 
 /* ---- the click ------------------------------------------------------------ */
 function gclick(ev){
-  const v=G.click;G.n+=v;G.earned+=v;
+  const v=G.click;G.n+=v;G.earned+=v;G.clicks++;
   G.sv-=3.4;                                   // kick the squash spring
   const r=$("gtom").getBoundingClientRect();
   const x=ev&&ev.clientX!==undefined?ev.clientX:r.left+r.width/2;
@@ -1154,7 +1158,7 @@ function goldHit(){
   const g=G.gold,r=g.el.getBoundingClientRect();
   const x=r.left+r.width/2,y=r.top+r.height/2;
   const rew=Math.max(25*G.click,G.ps*30,25);
-  G.n+=rew;G.earned+=rew;
+  G.n+=rew;G.earned+=rew;G.clicks++;
   splash(x,y,34,true);ring(x,y,44);
   floatText("juicy  +"+num(rew),x,y,5.2,"#ffcf72");
   g.el.remove();G.gold=null;G.goldAt=performance.now()/1000+70+Math.random()*70;
@@ -1207,7 +1211,15 @@ function paintGame(){
   $("rate").textContent=(G.ps?G.ps.toFixed(1):"0")+" per second";
   const today=Math.max(HIST[G.day]||0,Math.floor(G.earned));
   $("best").textContent="today "+num(today)+"  ·  best day "+num(Math.max(ALLBEST,today));
-  $("glife").textContent=G.earned>=10?num(G.earned)+" grown in all":"";
+  // The corner counts clicks, not tomatoes. It used to show G.earned, which
+  // is the same number the line above already gives as "today" — and called
+  // it "grown in all", which it never was: rollDay zeroes earned at
+  // midnight, so the all-time total it claimed to be was a day old at most.
+  // Clicks are the half of the day the scoreboard cannot otherwise see: the
+  // same garden reaches the same total whether it was worked or merely left
+  // running, and only this number tells the two apart.
+  $("glife").textContent=G.clicks
+    ? num(G.clicks)+(G.clicks===1?" click":" clicks")+" today" : "";
   // No overrun branch: the game closes itself the moment the break is over.
   $("gclock").textContent=st&&st.phase==="BREAK"
     ? mmss(Math.max(0,st.target-Date.now()/1000))+" of break left" : "";
