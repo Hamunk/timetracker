@@ -19,7 +19,14 @@ BIN_DIR="$DATA_DIR/bin"
 # Reverse-DNS prefix for the helper bundles and the launchd labels. macOS ties
 # TCC permission grants to this identity, so a change here costs one round of
 # re-granting Automation/Calendars/Reminders and nothing else.
-BID_PREFIX="com.timetracker"
+#
+# A scratch install has to override it, and TIMETRACK_DIR alone is not enough
+# to make one safe. Two bundles sharing an identifier are, to LaunchServices
+# and to TCC, the same app: the Automation and Calendars grants you answered
+# for the real one would be handed to whichever copy asked last, and taken
+# from it again just as quietly. Separate data is worth little if a test run
+# can revoke the permissions the real install depends on.
+BID_PREFIX="${TIMETRACK_BID_PREFIX:-com.timetracker}"
 
 mkdir -p "$BIN_DIR"
 # Your log is a record of when you work and what on. On a shared Mac the
@@ -113,6 +120,7 @@ fi
 # offered at all — there is no notifications-only imitation of it.
 
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
+VERB="${TIMETRACK_VERB:-time}"
 HELPER_APP="$APPS_DIR/TimeTracker Prompt.app"
 HELPER_BIN="$HELPER_APP/Contents/MacOS/ttprompt"
 if command -v swiftc >/dev/null 2>&1; then
@@ -317,21 +325,21 @@ Installed.
   scripts:  $BIN_DIR
   apps:     ${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}
 
-Try it:  Cmd+Space  ->  "time new"  ->  Enter
+Try it:  Cmd+Space  ->  "$VERB new"  ->  Enter
 
 The pomodoro break menu has two tools, and each needs one permission that is
 much better answered now than in the middle of a break — an unanswered prompt
 blocks the thing that raised it:
 
-  Cmd+Space  ->  "time spotify"    ->  Enter     (Automation: Spotify)
-  Cmd+Space  ->  "time reminders"  ->  Enter     (Privacy: Reminders)
-  Cmd+Space  ->  "time calendar"   ->  Enter     (Privacy: Calendars)
+  Cmd+Space  ->  "$VERB spotify"    ->  Enter     (Automation: Spotify)
+  Cmd+Space  ->  "$VERB reminders"  ->  Enter     (Privacy: Reminders)
+  Cmd+Space  ->  "$VERB calendar"   ->  Enter     (Privacy: Calendars)
 
 All three report what they found and change nothing. Then open Settings to add
 your break playlists, pick the one you keep for work, and choose the calendar
 your tracked sessions get painted onto:
 
-  Cmd+Space  ->  "time settings"   ->  Enter
+  Cmd+Space  ->  "$VERB settings"   ->  Enter
 
 Give painting an empty calendar of its own: everything in it inside the last
 two weeks is rewritten to match the log, every time a session closes. To have

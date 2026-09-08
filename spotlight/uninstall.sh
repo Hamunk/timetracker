@@ -6,6 +6,7 @@
 set -uo pipefail
 
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
+BIN_DIR="$DATA_DIR/bin"
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
@@ -14,11 +15,24 @@ if [[ -f "$DATA_DIR/pomodoro" ]]; then
     IFS=$'\t' read -r _ _ _ _ _ _ wpid < "$DATA_DIR/pomodoro" 2>/dev/null || true
     [[ "${wpid:-}" =~ ^[0-9]+$ ]] && kill "$wpid" 2>/dev/null
 fi
-pkill -f "pomodoro-watch.sh" 2>/dev/null
-pkill -f "ttprompt overlay" 2>/dev/null
-pkill -f "spotify.sh" 2>/dev/null
+# The overlay and the Spotify agent each leave a pid behind; use it.
+for PIDFILE in "$DATA_DIR/.tomato-overlay.pid" "$DATA_DIR/.tomato-spotify.pid"; do
+    read -r p < "$PIDFILE" 2>/dev/null || continue
+    [[ "$p" =~ ^[0-9]+$ ]] && kill "$p" 2>/dev/null
+done
+# Then a sweep for whatever those pids did not account for — matched by the
+# path of *this* install's copy of each script, never by its bare name. A
+# scratch install runs byte-identical copies of all three, and `pkill -f
+# pomodoro-watch.sh` would reach across and end a real cycle that has nothing
+# to do with the install being removed. pgrep patterns are extended regexes,
+# so the path has to be quoted before it can be used as one.
+re_quote() { printf '%s' "$1" | sed 's#[][^$.*+?(){}|\\]#\\&#g'; }
+pkill -f "^$(re_quote "$BIN_DIR")/(pomodoro-watch|spotify)\.sh" 2>/dev/null
+pkill -f "^$(re_quote "$APPS_DIR")/TimeTracker Prompt\.app/Contents/MacOS/ttprompt overlay" \
+    2>/dev/null
 rm -f "$DATA_DIR/pomodoro" "$DATA_DIR/.tomato-choice" "$DATA_DIR/.tomato-alive" \
       "$DATA_DIR/.prompt-answer" "$DATA_DIR/.tomato-audio" \
+      "$DATA_DIR/.tomato-overlay.pid" \
       "$DATA_DIR/.media-stop" \
       "$DATA_DIR/.tomato-spotify" "$DATA_DIR/.tomato-spotify-want" \
       "$DATA_DIR/.tomato-spotify-cmd" "$DATA_DIR/.tomato-spotify.pid" \

@@ -34,7 +34,20 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 # is still one of ours, and it has to go: it is not regenerated, nothing
 # updates it, and it would sit in the launcher for ever as a second copy of a
 # course that already has one.
-BID_PREFIX="com.timetracker"
+BID_PREFIX="${TIMETRACK_BID_PREFIX:-com.timetracker}"
+
+# The word you type. It is the bundle *filename*, because that is what the
+# launcher displays and matches, so it is also the only thing keeping a
+# scratch install out of the way of the real one: with both installed and
+# both called "time", the launcher offers two identical rows and the wrong
+# one writes to the wrong log.
+#
+# A scratch install therefore also gives up the bare aliases. "BØK2100" and
+# "økstyr2" are what you actually type, they belong to the real install, and
+# a second bundle answering to them would put that same ambiguous pair in
+# front of you at the exact moment you are trying to start work.
+VERB="${TIMETRACK_VERB:-time}"
+if [[ "$VERB" == "time" ]]; then BARE_ALIASES=1; else BARE_ALIASES=0; fi
 
 mkdir -p "$APPS_DIR"
 
@@ -146,6 +159,13 @@ EOF
         if [[ -n "${TIMETRACK_APPS_DIR:-}" ]]; then
             printf 'export TIMETRACK_APPS_DIR=%q\n' "$TIMETRACK_APPS_DIR"
         fi
+        # The break menu opens "<verb> spotify.app" by name, so a bundle that
+        # did not carry the verb would send the watcher looking for the real
+        # install's name inside the scratch install's folder, and the Spotify
+        # entry would go quietly missing with nothing to explain why.
+        if [[ -n "${TIMETRACK_VERB:-}" ]]; then
+            printf 'export TIMETRACK_VERB=%q\n' "$TIMETRACK_VERB"
+        fi
         printf '%s\n' "$body"
     } > "$macos_dir/run"
     chmod +x "$macos_dir/run"
@@ -155,24 +175,24 @@ EOF
 
 # --- Fixed control apps -----------------------------------------------------
 
-make_app "time" "toggle" 'exec "$BIN/toggle.sh"' > /dev/null
-make_app "time new" "new" 'exec "$BIN/newcat.sh"' > /dev/null
-make_app "time categories" "categories" \
+make_app "$VERB" "toggle" 'exec "$BIN/toggle.sh"' > /dev/null
+make_app "$VERB new" "new" 'exec "$BIN/newcat.sh"' > /dev/null
+make_app "$VERB categories" "categories" \
     'exec /usr/bin/open -t "${TIMETRACK_DIR:-$HOME/.timetrack}/categories.tsv"' > /dev/null
 
 # The data folder is a dotfolder, so Finder hides it. This is the shortcut.
-make_app "time data" "data" \
+make_app "$VERB data" "data" \
     'exec /usr/bin/open "${TIMETRACK_DIR:-$HOME/.timetrack}"' > /dev/null
 
 # Detached, not exec'd: if the app process *is* the server it stays alive while
 # the browser polls, and LaunchServices then refuses to relaunch the app.
-make_app "time dashboard" "dashboard" \
+make_app "$VERB dashboard" "dashboard" \
     'nohup /usr/bin/python3 "$BIN/dashboard.py" >/dev/null 2>&1 &
 exit 0' > /dev/null
 
 # Same detached body — the server reuses a running instance — but lands the
 # browser on the settings page.
-make_app "time settings" "settings" \
+make_app "$VERB settings" "settings" \
     'nohup /usr/bin/python3 "$BIN/dashboard.py" --settings >/dev/null 2>&1 &
 exit 0' > /dev/null
 
@@ -196,7 +216,7 @@ make_app "TimeTracker Media" "media" 'exec "$BIN/pause-media.sh"' > /dev/null
 # a calm moment and reports what it can see, which is the quickest way to find
 # out whether the grant survived.
 if [[ -f "$BIN_DIR/spotify.sh" ]]; then
-    make_app "time spotify" "spotify" 'exec "$BIN/spotify.sh"' > /dev/null
+    make_app "$VERB spotify" "spotify" 'exec "$BIN/spotify.sh"' > /dev/null
 fi
 
 # The break menu's capture box, in the calendar's two-bundle shape: the
@@ -205,7 +225,7 @@ fi
 # break rather than during one. Running it writes nothing — the helper only
 # asks for access and reports back when it is handed no note.
 if [[ -d "$APPS_DIR/TimeTracker Reminders.app" ]]; then
-    make_app "time reminders" "reminders" \
+    make_app "$VERB reminders" "reminders" \
         'D="${TIMETRACK_DIR:-$HOME/.timetrack}"
 rm -f "$D/.tomato-reminder-result"
 /usr/bin/open -W -g "${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}/TimeTracker Reminders.app"
@@ -232,7 +252,7 @@ fi
 # than a hidden bundle. (It used to be the other way round: this name once ran
 # an agent that read the calendar and started timers off it. That went.)
 if [[ -f "$BIN_DIR/paint-calendar.sh" ]]; then
-    make_app "time calendar" "calendar" \
+    make_app "$VERB calendar" "calendar" \
         'out=$("$BIN/paint-calendar.sh" 2>&1)
 [[ -z "$out" ]] && out="Nothing to report."
 osascript - "$out" >/dev/null 2>&1 <<'"'"'EOS'"'"'
@@ -268,23 +288,29 @@ if [[ -s "$CAT_FILE" ]]; then
         wanted_slugs+=("$slug")
 
         if [[ -n "${name:-}" && "$name" != "$key" ]]; then
-            app_name="time $key – $name"
+            app_name="$VERB $key – $name"
         else
-            app_name="time $key"
+            app_name="$VERB $key"
         fi
 
         app_path=$(make_app "$app_name" "cat.$slug" \
             "$(printf 'exec "$BIN/start.sh" %q' "$key")")
 
         # Aliases: the key, the name, and every keyword.
-        declare -a aliases=("$key" "time $key")
-        [[ -n "${name:-}" ]] && aliases+=("$name" "time $name")
+        declare -a aliases=("$VERB $key")
+        (( BARE_ALIASES )) && aliases+=("$key")
+        if [[ -n "${name:-}" ]]; then
+            aliases+=("$VERB $name")
+            (( BARE_ALIASES )) && aliases+=("$name")
+        fi
         if [[ -n "${keywords:-}" ]]; then
             IFS=',' read -r -a kws <<< "$keywords"
             for kw in "${kws[@]}"; do
                 kw="${kw#"${kw%%[![:space:]]*}"}"
                 kw="${kw%"${kw##*[![:space:]]}"}"
-                [[ -n "$kw" ]] && aliases+=("$kw" "time $kw")
+                [[ -z "$kw" ]] && continue
+                aliases+=("$VERB $kw")
+                (( BARE_ALIASES )) && aliases+=("$kw")
             done
         fi
         while IFS= read -r lc_alias; do

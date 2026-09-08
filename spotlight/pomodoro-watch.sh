@@ -42,6 +42,7 @@ DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 STATE_FILE="$DATA_DIR/state"
 POMO_FILE="$DATA_DIR/pomodoro"
 CHOICE_FILE="$DATA_DIR/.tomato-choice"
+OVERLAY_PID="$DATA_DIR/.tomato-overlay.pid"
 ALIVE_FILE="$DATA_DIR/.tomato-alive"
 AUDIO_FILE="$DATA_DIR/.tomato-audio"
 STOP_FILE="$DATA_DIR/.media-stop"
@@ -68,7 +69,7 @@ MEDIA_APP="$APPS_DIR/TimeTracker Media.app"
 # there is exactly one bundle allowed to talk to Spotify — a second would be a
 # second Automation prompt — so the one that does it is also the one you run by
 # hand to answer that prompt before a break ever raises it.
-SPOTIFY_APP="$APPS_DIR/time spotify.app"
+SPOTIFY_APP="$APPS_DIR/${TIMETRACK_VERB:-time} spotify.app"
 REMINDERS_APP="$APPS_DIR/TimeTracker Reminders.app"
 TICK=10
 
@@ -96,10 +97,27 @@ write_pomo() {
     mv -f "$tmp" "$POMO_FILE"
 }
 
-# Overlay instances are told apart from the start prompt by their mode arg.
-overlay_running() { pgrep -qf "ttprompt overlay"; }
-kill_overlay()    { pkill -f "ttprompt overlay" 2>/dev/null || true
-                    rm -f "$ALIVE_FILE" "$AUDIO_FILE"; }
+# The overlay this watcher started, by pid, and only if that pid still belongs
+# to an overlay. By name it would be ambiguous: a scratch install runs a
+# byte-identical helper under a byte-identical argv, so each watcher would
+# adopt the other's window — reporting one healthy while its own is gone, and
+# killing a full-screen tomato in the middle of somebody else's break. A pid
+# is the one thing about a process the two installs cannot share.
+overlay_pid() {
+    local pid
+    read -r pid < "$OVERLAY_PID" 2>/dev/null || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    # A pid file outlives the process it names and pids are reused, so ask the
+    # process what it is before believing in it or signalling it.
+    case "$(ps -p "$pid" -o command= 2>/dev/null)" in
+        *ttprompt*overlay*) printf '%s' "$pid" ;;
+        *)                  return 1 ;;
+    esac
+}
+overlay_running() { overlay_pid >/dev/null; }
+kill_overlay()    { local pid
+                    pid=$(overlay_pid) && kill "$pid" 2>/dev/null
+                    rm -f "$OVERLAY_PID" "$ALIVE_FILE" "$AUDIO_FILE"; }
 
 # Which break-menu entries the overlay may draw, as one argv word so the
 # helper's argument list stays short: "spotify,reminders", or "-" for neither.
@@ -149,6 +167,7 @@ launch_overlay() {
         "$(tt_setting auto_accept_seconds)" "$(tt_setting easter_egg)" \
         "$(menu_features)" \
         >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$OVERLAY_PID"
 }
 
 # Is sound actually reaching the speakers? coreaudiod holds a named power
