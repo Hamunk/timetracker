@@ -46,6 +46,11 @@ last left at:
 
     cd ../timetracker-wip && git switch -c note/<slug> main
 
+The one exception is this arrangement itself — this file, `dev.sh`, the guard.
+When the owner asks for a change to how the work is done, rather than to the
+program, it belongs on main and is committed there at once, so the tree is
+never left dirty. Work from a note is never that exception.
+
 `./dev.sh` installs from whichever tree it is run in, so run it from the
 worktree and the scratch install is your branch, not the owner's.
 
@@ -92,8 +97,17 @@ author. One note is one task.
    *why*, at length, and a patch that skips that reads as foreign.
 4. `./dev.sh install`, then actually exercise the change. A change nobody ran
    is not finished.
-5. Report: what changed, what you ran to see it work, what you did not cover.
-   Do not merge, and never install to the real side.
+5. Commit on the note branch, without being asked. The usual caution about
+   committing is about not putting work somewhere it is hard to take back, and
+   a note branch is the opposite of that: it is scratch, it is never `main`,
+   and left uncommitted it cannot be read with `git diff main...note/<slug>`,
+   cannot be merged, and is one absent-minded `git switch` from gone. Write the
+   message in the house style — what the change is for, and what went wrong
+   without it.
+6. Report: what changed, what you ran to see it work, what you did not cover.
+   Do not merge, and never install to the real side. Those two steps are the
+   owner's, and they are the only two that reach the install being used for
+   real work.
 
 Moving a note out of the inbox is the author's call, not yours.
 
