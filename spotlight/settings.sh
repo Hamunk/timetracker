@@ -11,7 +11,8 @@
 #                           Use this rather than multiplying in the shell:
 #                           some durations accept fractional minutes.
 #   tt_setting_spec <key>   sets TT_DEF, TT_MIN, TT_MAX (MIN/MAX empty means
-#                           the value is the on/off enum). rc 1 = unknown key.
+#                           the value is the on/off enum, or a key name when
+#                           TT_KEY is set). rc 1 = unknown key.
 #   tt_setting_keys         prints every known key, one per line.
 #   tt_setting_valid <key> <value>   rc 0 iff the value is in range.
 #
@@ -21,7 +22,7 @@
 
 # The whole defaults-and-ranges table. Add new settings here and only here.
 tt_setting_spec() {
-    TT_DEF="" TT_MIN="" TT_MAX="" TT_FRAC=""
+    TT_DEF="" TT_MIN="" TT_MAX="" TT_FRAC="" TT_KEY=""
     case "$1" in
         # TT_FRAC marks a setting that also takes fractional minutes, so a
         # whole cycle can be exercised in seconds while testing: 0.5 is 30
@@ -59,6 +60,17 @@ tt_setting_spec() {
         # session is the thing this exists to prevent, and the next tomato
         # would only hush it again anyway.
         spotify_resume_work) TT_DEF=on ;;
+        # A break that runs over while music you started is still playing:
+        # pause it. The silence is the notification, and it is the one kind
+        # that reaches someone who has wandered off with headphones on.
+        # Only ever fires for music the break menu itself started.
+        spotify_pause_on_overrun) TT_DEF=on ;;
+        # Keys on the break screen. TT_KEY marks a setting whose value is a
+        # key name: a single letter or digit, or Tab or Space. Letters are
+        # matched without regard to case.
+        key_menu)           TT_DEF=Tab TT_KEY=1 ;;
+        key_spotify)        TT_DEF=s   TT_KEY=1 ;;
+        key_reminder)       TT_DEF=n   TT_KEY=1 ;;
         # Painting the log onto a calendar. On by itself does nothing: the
         # calendar to paint into is named in its own file (free text, so not
         # table material), and without one every paint says so and stops.
@@ -77,13 +89,16 @@ tt_setting_spec() {
 tt_setting_keys() {
     printf '%s\n' pomodoro_minutes break_minutes long_break_minutes \
         long_break_every snooze_minutes auto_accept_seconds pomodoro_default \
-        sound pause_media easter_egg spotify spotify_resume_work reminders \
-        paint_calendar paint_days paint_min_minutes
+        sound pause_media key_menu key_spotify key_reminder \
+        easter_egg spotify spotify_resume_work spotify_pause_on_overrun \
+        reminders paint_calendar paint_days paint_min_minutes
 }
 
 tt_setting_valid() {
     tt_setting_spec "$1" || return 1
-    if [[ -z "$TT_MIN" ]]; then
+    if [[ -n "$TT_KEY" ]]; then
+        [[ "$2" =~ ^([A-Za-z0-9]|Tab|Space)$ ]]
+    elif [[ -z "$TT_MIN" ]]; then
         [[ "$2" == "on" || "$2" == "off" ]]
     elif [[ -n "$TT_FRAC" ]]; then
         # Decimals need awk: the shell can only compare integers.

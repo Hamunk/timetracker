@@ -16,6 +16,7 @@
 #   action.sh workplaylist <uri>|-           (the one playlist kept for work)
 #   action.sh setremlist <name>              (which Reminders list a break note goes to)
 #   action.sh setpaintcal <name>|-           (which calendar the log is painted onto)
+#   action.sh setupdone                      (the first-run setup has been completed)
 #
 # The optional [at_epoch] exists because the prompts are shown *before* the
 # action lands: the caller stamps the moment you actually pressed the key, so
@@ -638,9 +639,10 @@ case "$query" in
                 # Braces are load-bearing: under the C locale (how the app
                 # bundles launch), bash pulls the en dash's first byte into
                 # the variable name and dies on "TT_MIN\xe2: unbound".
-                if [[ -n "$TT_MIN" ]]; then range="${TT_MIN}–${TT_MAX}"
-                else range="on/off"; fi
-                action_msg="Invalid value for $key — allowed: $range"
+                if [[ -n "$TT_KEY" ]]; then range="one letter or digit, Tab or Space"
+                elif [[ -n "$TT_MIN" ]]; then range="${TT_MIN} to ${TT_MAX}"
+                else range="on or off"; fi
+                action_msg="Invalid value for $key. Allowed: $range"
                 action_rc=1
             else
                 write_setting "$key" "$value"
@@ -736,6 +738,12 @@ case "$query" in
             LOG_CHANGED=1
             action_msg="Painting onto “${pc_name}”"
         fi
+        ;;
+    setupdone)
+        # A marker, not a setting: the dashboard opens on the setup page until
+        # this exists, and it is written here because nothing else writes.
+        : > "$DATA_DIR/.setup-done"
+        action_msg="Setup complete"
         ;;
     *)
         action_msg="Unknown action: $query"

@@ -52,6 +52,19 @@ PAINTCAL_FILE = os.path.join(DATA_DIR, "paint-calendar")
 PAINTLIST_FILE = os.path.join(DATA_DIR, ".paint-calendars.tsv")
 PAINT_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "paint-calendar.sh")
+# Two markers, both written by something other than this server. The overlay
+# helper touches the first the moment the easter egg is opened, and the
+# settings page shows the game's own section only once it exists: a settings
+# page is not the place to learn there is a game. action.sh writes the second
+# when the first-run setup finishes, and until it does the dashboard opens
+# on the setup page.
+TOMATO_FOUND_FILE = os.path.join(DATA_DIR, ".tomato-found")
+SETUP_DONE_FILE = os.path.join(DATA_DIR, ".setup-done")
+# Where the app bundles are. Only ever used to open the three permission
+# helpers by their fixed names; nothing from a request reaches this path.
+APPS_DIR = (os.environ.get("TIMETRACK_APPS_DIR")
+            or os.path.expanduser("~/Applications/TimeTracker"))
+VERB = os.environ.get("TIMETRACK_VERB") or "time"
 # All writes go through action.sh, which lives next to this file.
 ACTION_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "action.sh")
 # Retiring a category also has to rebuild the launcher bundles, the same way
@@ -412,8 +425,8 @@ def read_settings():
         '. "$1" || exit 1\n'
         'for k in $(tt_setting_keys); do\n'
         '  tt_setting_spec "$k"\n'
-        '  printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \\\n'
-        '    "$k" "$(tt_setting "$k")" "$TT_DEF" "$TT_MIN" "$TT_MAX" "$TT_FRAC"\n'
+        '  printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \\\n'
+        '    "$k" "$(tt_setting "$k")" "$TT_DEF" "$TT_MIN" "$TT_MAX" "$TT_FRAC" "$TT_KEY"\n'
         'done\n'
     )
     try:
@@ -435,12 +448,13 @@ def read_settings():
     out = []
     for line in proc.stdout.splitlines():
         p = line.split("\t")
-        if len(p) != 6 or not p[0]:
+        if len(p) != 7 or not p[0]:
             continue
         frac = bool(p[5])
+        kind = "key" if p[6] else ("number" if p[3] else "onoff")
         out.append({"key": p[0], "value": p[1], "default": p[2],
                     "min": num(p[3]), "max": num(p[4]),
-                    "step": 0.1 if frac else 1})
+                    "step": 0.1 if frac else 1, "kind": kind})
     return out
 
 
@@ -753,9 +767,20 @@ SETTINGS_PAGE = """<!doctype html>
 <title>TimeTracker Settings</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>__CSS__
-.wrap{max-width:560px}
+.wrap{max-width:600px}
+/* section chips at the top: one per panel, scroll on click */
+.toc{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px}
+.toc a{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);
+color:var(--fg);text-decoration:none;background:var(--card)}
+.toc a:hover{border-color:var(--accent);color:var(--accent)}
+section{margin-top:30px;scroll-margin-top:16px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+margin:0 0 4px;font-weight:600}
+.lead{color:var(--mut);font-size:12px;margin:0 0 9px;line-height:1.5}
+.lead a{color:var(--accent);text-decoration:none}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;
 padding:2px 20px}
+.panel+.panel,.panel+.addform,.panel+.onerow{margin-top:10px}
 .row{display:grid;grid-template-columns:1fr 150px;gap:2px 16px;
 padding:14px 0;border-bottom:1px solid var(--line)}
 .row:last-child{border-bottom:0}
@@ -764,20 +789,22 @@ padding:14px 0;border-bottom:1px solid var(--line)}
 .row input,.row select{grid-column:2;grid-row:1/span 2;align-self:center;
 font:inherit;font-size:14px;padding:6px 8px;width:100%;
 color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:7px}
+.row input.key{text-align:center;font-family:ui-monospace,Menlo,monospace}
 .row input:focus,.row select:focus{outline:2px solid var(--accent);outline-offset:-1px}
-.foot{display:flex;align-items:center;gap:10px;padding-top:14px}
-.foot .spacer{flex:1}
-.foot #stat{font-size:12px;text-align:right}
-.warn{color:var(--warn)}
-/* An unsaved row says so, and its field takes the accent border — the panel
-   shows what Save is about to do before you press it. */
+/* An unsaved row says so, and its field takes the accent border. */
 .row.changed input,.row.changed select{border-color:var(--accent)}
 .row.changed .name::after{content:"unsaved";display:inline-block;font-size:10px;
 padding:1px 6px;border-radius:5px;border:1px solid var(--accent);
 color:var(--accent);margin-left:8px;vertical-align:middle;letter-spacing:.04em;
 text-transform:uppercase;font-weight:600}
+/* the one Save for every value on the page, kept in view */
+.foot{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;
+padding:12px 0;margin-top:30px;background:var(--bg);border-top:1px solid var(--line)}
+.foot .spacer{flex:1}
+.foot #stat{font-size:12px;text-align:right}
+.warn{color:var(--warn)}
 .empty{padding:22px 0;color:var(--mut);font-size:14px}
-/* break menu: playlist rows and the two small add forms */
+/* playlist rows and the two small forms */
 .prow{display:grid;grid-template-columns:auto 1fr auto;gap:2px 12px;
 align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
 .prow:last-child{border-bottom:0}
@@ -788,23 +815,18 @@ text-overflow:ellipsis;white-space:nowrap}
 Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pacts{grid-column:3;grid-row:1/span 2;white-space:nowrap;text-align:right}
 .prow.work .pname{color:var(--live)}
-.addform{display:flex;gap:8px;padding:14px 0 4px;flex-wrap:wrap}
+.addform{display:flex;gap:8px;padding:10px 0 4px;flex-wrap:wrap}
 .addform input{flex:1 1 150px;min-width:0;font:inherit;font-size:14px;
 padding:6px 8px;color:var(--fg);background:var(--bg);
 border:1px solid var(--line);border-radius:7px}
 .addform input:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .addform .btn{flex:none}
-.onerow{display:flex;gap:8px;align-items:center;padding:14px 0 4px}
+.onerow{display:flex;gap:8px;align-items:center;padding:10px 0 4px}
 .onerow input,.onerow select{flex:1;min-width:0;font:inherit;font-size:14px;
 padding:6px 8px;color:var(--fg);background:var(--bg);
 border:1px solid var(--line);border-radius:7px}
 .onerow input:focus,.onerow select:focus{outline:2px solid var(--accent);
 outline-offset:-1px}
-/* A <select> keeps the platform's own popup-button skin — grey, light even in
-   dark mode, and nothing like the rest of this page — until appearance is
-   turned off, and turning it off also takes the disclosure arrow with it. So
-   the arrow is drawn back on as a background image, and the padding on the
-   right is what keeps a long calendar name from running underneath it. */
 .onerow select,.row select{-webkit-appearance:none;appearance:none;
 padding-right:26px;cursor:pointer;
 background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -812,12 +834,7 @@ background-repeat:no-repeat;background-position:right 9px center;
 background-size:10px 6px}
 @media (prefers-color-scheme:dark){.onerow select,.row select{
 background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9aa0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}}
-/* The picker is the row's subject; the two buttons beside it are not. */
 .onerow .btn{flex:none}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
-margin:34px 0 4px;font-weight:600}
-.lead{color:var(--mut);font-size:12px;margin:0 0 9px}
-/* Same two-row grid as .row, but the controls column sizes to its buttons. */
 .crow{display:grid;grid-template-columns:1fr auto;gap:2px 12px;
 padding:12px 0;border-bottom:1px solid var(--line)}
 .crow:last-child{border-bottom:0}
@@ -836,86 +853,113 @@ vertical-align:middle;letter-spacing:.04em;text-transform:uppercase}
 .cacts{grid-column:1;grid-row:auto;text-align:left;margin-top:7px}
 .cacts .btn{margin:0 5px 0 0}}
 </style></head><body><div class="wrap">
-<h1>TimeTracker Settings</h1>
-<div class="sub"><a id="nav-back" href="#">&larr; Dashboard</a></div>
+<h1>Settings</h1>
+<div class="sub"><a id="nav-back" href="#">&larr; Dashboard</a> &middot;
+<a id="nav-guide" href="#">Guide</a></div>
+<div class="toc" id="toc"></div>
 <div class="msg" id="msg"></div>
-<div class="panel" id="panel"><div class="empty">Loading&hellip;</div></div>
-<div class="foot"><span class="spacer"></span><span class="mut" id="stat"></span>
-<button class="btn primary" id="save" disabled>Save</button></div>
-<h2>Break playlists</h2>
-<div class="lead">What the Spotify panel offers during a break. Copy a link
-from Spotify (right-click a playlist &rarr; Share &rarr; Copy link) and give it
-a name — nothing here can ask Spotify what your playlists are called. Mark one
-as <b>work</b> and it is kept out of the break list and started again when you
-press &ldquo;I'm back&rdquo;.</div>
+
+<section id="s-timer"><h2>Timer</h2>
+<div class="lead">Lengths in minutes. The two short ones accept decimals.</div>
+<div class="panel" data-sec="timer"><div class="empty">Loading&hellip;</div></div></section>
+
+<section id="s-screen"><h2>Break screen</h2>
+<div class="lead">What happens when the tomato takes the screen, and which keys
+work on it. A key is one letter or digit, or Tab or Space.</div>
+<div class="panel" data-sec="screen"><div class="empty">Loading&hellip;</div></div></section>
+
+<section id="s-spotify"><h2>Spotify</h2>
+<div class="lead">The break menu can play your playlists in the Spotify app.
+Add a playlist by pasting its link (Share &rarr; Copy link in Spotify) and
+giving it a name. Mark one as <b>work</b> and it plays when the break ends
+instead of the break music.</div>
+<div class="panel" data-sec="spotify"><div class="empty">Loading&hellip;</div></div>
 <div class="panel" id="pls"><div class="empty">Loading&hellip;</div></div>
 <div class="addform">
   <input id="pl-name" type="text" placeholder="Name" maxlength="60">
   <input id="pl-uri" type="text" placeholder="Spotify link" maxlength="300">
   <button class="btn primary" id="pl-add">Add</button>
-</div>
+</div></section>
 
-<h2>Calendar painting</h2>
-<div class="lead">Every session you log is painted onto this calendar, and
-kept in step when you edit or delete one. Give it an empty calendar of its own
-&mdash; everything in it inside the last <span id="pd-days">14</span> days is
-rewritten to match the log, and nothing outside that window or in the future is
-touched. Make it in Google Calendar and tick it in
+<section id="s-reminders"><h2>Reminders</h2>
+<div class="lead">The break menu can file a note into Apple Reminders. The list
+is created when the first note is saved.</div>
+<div class="panel" data-sec="reminders"><div class="empty">Loading&hellip;</div></div>
+<div class="onerow">
+  <input id="rl-name" type="text" placeholder="List name" maxlength="60">
+  <button class="btn" id="rl-save">Save list</button>
+</div></section>
+
+<section id="s-calendar"><h2>Calendar</h2>
+<div class="lead">Every logged session can be written to a calendar. Use an
+empty calendar of its own: everything in it from the last
+<span id="pd-days">14</span> days is rewritten to match the log. To see it on
+your phone, create the calendar in Google Calendar and enable it under
 <a href="https://calendar.google.com/calendar/syncselect" target="_blank"
-rel="noreferrer">sync settings</a> to have it on your phone.</div>
+rel="noreferrer">sync settings</a>.</div>
+<div class="panel" data-sec="calendar"><div class="empty">Loading&hellip;</div></div>
 <div class="onerow">
   <select id="pc-name"><option value="">Loading&hellip;</option></select>
   <button class="btn" id="pc-refresh">Refresh</button>
-  <button class="btn" id="pc-save">Save</button>
+  <button class="btn" id="pc-save">Save calendar</button>
 </div>
-<div class="lead" id="pc-note"></div>
+<div class="lead" id="pc-note"></div></section>
 
-<h2>Break notes</h2>
-<div class="lead">Which Reminders list &ldquo;Add Reminder&rdquo; files into.
-It is created the first time something is saved, so a list of its own costs
-nothing — move things out of it afterwards.</div>
-<div class="onerow">
-  <input id="rl-name" type="text" placeholder="Pause Notes" maxlength="60">
-  <button class="btn" id="rl-save">Save</button>
-</div>
+<section id="s-categories"><h2>Categories</h2>
+<div class="lead">Hide removes a category from the launcher and can be undone.
+Delete removes it for good. Logged hours are kept either way.</div>
+<div class="panel" id="cats"><div class="empty">Loading&hellip;</div></div></section>
 
-<h2>Categories</h2>
-<div class="lead">Hide takes a category out of the launcher and the toggle, and
-is reversible. Delete retires it for good. Either way every logged hour stays
-in the log.</div>
-<div class="panel" id="cats"><div class="empty">Loading&hellip;</div></div>
+<section id="s-tomato" hidden><h2>Tomato game</h2>
+<div class="lead">You found it.</div>
+<div class="panel" data-sec="tomato"><div class="empty">Loading&hellip;</div></div></section>
+
+<div class="foot"><span class="spacer"></span><span class="mut" id="stat"></span>
+<button class="btn primary" id="save" disabled>Save</button></div>
 </div><script>
 const TOKEN=new URLSearchParams(location.search).get("t")||"";
 const $=i=>document.getElementById(i);
 $("nav-back").href="/?t="+encodeURIComponent(TOKEN);
-// Display names only — the keys, defaults and ranges come from the server,
-// which gets them from settings.sh. An unlisted key still renders by its key.
+$("nav-guide").href="/guide?t="+encodeURIComponent(TOKEN);
+// Which panel each setting belongs to. Keys, defaults and ranges come from
+// the server; a key not listed here lands in the Timer panel by its name.
+const SEC={
+ timer:["pomodoro_minutes","break_minutes","long_break_minutes","long_break_every",
+   "snooze_minutes","auto_accept_seconds","pomodoro_default"],
+ screen:["sound","pause_media","key_menu","key_spotify","key_reminder"],
+ spotify:["spotify","spotify_resume_work","spotify_pause_on_overrun"],
+ reminders:["reminders"],
+ calendar:["paint_calendar","paint_days","paint_min_minutes"],
+ tomato:["easter_egg"]};
 const META={
- pomodoro_minutes:["Pomodoro length","Minutes of one work session"],
- break_minutes:["Short break","Minutes of the short break"],
- long_break_minutes:["Long break","Minutes of the long break"],
- long_break_every:["Long break every","Every Nth completed pomodoro gets the long break"],
- snooze_minutes:["Snooze","Minutes a snoozed tomato is postponed"],
+ pomodoro_minutes:["Work session","Minutes of work before the tomato"],
+ break_minutes:["Short break",""],
+ long_break_minutes:["Long break",""],
+ long_break_every:["Long break every","Every Nth pomodoro gets the long break"],
+ snooze_minutes:["Snooze","Minutes a snoozed tomato waits"],
  auto_accept_seconds:["No-answer timeout",
-   "Seconds before an unanswered tomato takes the break by itself"],
- pomodoro_default:["Pomodoro pre-selected",
-   "Start the prompt with the Pomodoro mode box already ticked"],
- sound:["Sound","Play a sound with pomodoro notifications"],
- pause_media:["Pause media on break",
-   "Pause video and music everywhere when the tomato takes the screen"],
- easter_egg:["Easter egg","Let the tomato open its hidden game on a break"],
- spotify:["Spotify in the break menu",
-   "Offer the Spotify remote behind the hamburger on the pause screen"],
- spotify_resume_work:["Work playlist when you're back",
-   "End a break you played music in by starting the work playlist again"],
- reminders:["Add Reminder in the break menu",
-   "Offer a capture box that files into Apple Reminders"],
- paint_calendar:["Paint sessions onto a calendar",
-   "Write every logged session to the calendar chosen below"],
- paint_days:["Repaint window",
-   "How many days back each paint reconciles against the log"],
- paint_min_minutes:["Shortest painted session",
-   "Sessions shorter than this are left off the calendar"]};
+   "Seconds before an unanswered tomato takes the break"],
+ pomodoro_default:["Pomodoro on by default",
+   "Start the plan prompt with Pomodoro mode ticked"],
+ sound:["Sound","Play a sound when the tomato appears"],
+ pause_media:["Pause media","Pause video and music when the tomato appears"],
+ key_menu:["Menu key","Opens and closes the break menu"],
+ key_spotify:["Spotify key","Opens the Spotify panel from the menu"],
+ key_reminder:["Reminder key","Opens the note panel from the menu"],
+ easter_egg:["Playable tomato","Let the tomato on the break screen open the game"],
+ spotify:["Spotify panel","Show Spotify in the break menu"],
+ spotify_resume_work:["Work playlist after a break",
+   "Play the work playlist when the break ends, if music was playing"],
+ spotify_pause_on_overrun:["Pause when the break runs over",
+   "Pause music you started when the break passes its end"],
+ reminders:["Reminders panel","Show Add Reminder in the break menu"],
+ paint_calendar:["Write sessions to the calendar",""],
+ paint_days:["Days to keep in sync","How far back each update reaches"],
+ paint_min_minutes:["Shortest session to write",
+   "Shorter sessions are left off the calendar"]};
+const TOC=[["s-timer","Timer"],["s-screen","Break screen"],["s-spotify","Spotify"],
+ ["s-reminders","Reminders"],["s-calendar","Calendar"],["s-categories","Categories"],
+ ["s-tomato","Tomato game"]];
 let CUR={},CATS=[],SEEN="",BUSY=false,SAVING=false,msgTimer=null,statTimer=null;
 function esc(t){const d=document.createElement("div");d.textContent=t==null?"":t;return d.innerHTML;}
 function escA(t){return esc(t).replace(/"/g,"&quot;");}
@@ -923,35 +967,50 @@ function note(text,bad){const m=$("msg");m.textContent=text;
 m.className="msg"+(bad?" bad":"");m.style.display="block";
 if(msgTimer)clearTimeout(msgTimer);
 msgTimer=setTimeout(()=>{m.style.display="none";},bad?8000:4000);}
-function render(list){
+function rowHTML(s){
+  const m=META[s.key]||[s.key,""];
+  let hint,field;
+  if(s.kind==="key"){
+    hint="default "+esc(s.default);
+    field='<input type="text" class="key" id="f-'+escA(s.key)+'" maxlength="5" value="'+escA(s.value)+'">';
+  }else if(s.kind==="number"){
+    hint=s.min+" to "+s.max+", default "+esc(s.default);
+    field='<input type="number" id="f-'+escA(s.key)+'" min="'+s.min+'" max="'+s.max+
+      '" step="'+(s.step||1)+'" value="'+escA(s.value)+'">';
+  }else{
+    hint="default "+esc(s.default);
+    field='<select id="f-'+escA(s.key)+'">'+
+      '<option value="on"'+(s.value==="on"?" selected":"")+'>On</option>'+
+      '<option value="off"'+(s.value==="off"?" selected":"")+'>Off</option></select>';
+  }
+  return '<div class="row"><span class="name">'+esc(m[0])+'</span>'+field+
+    '<span class="hint">'+(m[1]?esc(m[1])+". ":"")+hint+'</span></div>';
+}
+function render(list,found){
   CUR={};
-  if(!list.length){$("panel").innerHTML=
-    '<div class="empty">Could not load settings — is settings.sh installed?</div>';return;}
-  $("panel").innerHTML=list.map(s=>{
-    CUR[s.key]=s.value;
-    const m=META[s.key]||[s.key,""];
-    const hint=(s.min!=null?s.min+"\\u2013"+s.max:"on / off")+" \\u00b7 default "+esc(s.default);
-    const field=s.min!=null
-      ?'<input type="number" id="f-'+escA(s.key)+'" min="'+s.min+'" max="'+s.max+
-        '" step="'+(s.step||1)+'" value="'+escA(s.value)+'">'
-      :'<select id="f-'+escA(s.key)+'">'+
-        '<option value="on"'+(s.value==="on"?" selected":"")+'>On</option>'+
-        '<option value="off"'+(s.value==="off"?" selected":"")+'>Off</option></select>';
-    return '<div class="row"><span class="name">'+esc(m[0])+'</span>'+field+
-      '<span class="hint">'+(m[1]?esc(m[1])+" \\u2014 ":"")+hint+'</span></div>';
-  }).join("");
+  const by={};
+  for(const s of list){CUR[s.key]=s.value;by[s.key]=s;}
+  const placed=new Set();
+  for(const sec in SEC){
+    const panel=document.querySelector('.panel[data-sec="'+sec+'"]');
+    const rows=SEC[sec].filter(k=>by[k]).map(k=>{placed.add(k);return rowHTML(by[k]);});
+    panel.innerHTML=rows.join("")||'<div class="empty">Nothing here.</div>';
+  }
+  // Anything the server knows and this page does not: still editable.
+  const rest=list.filter(s=>!placed.has(s.key)).map(rowHTML).join("");
+  if(rest)document.querySelector('.panel[data-sec="timer"]').innerHTML+=rest;
+  if(!list.length)document.querySelector('.panel[data-sec="timer"]').innerHTML=
+    '<div class="empty">Could not load settings. Is settings.sh installed?</div>';
+  $("s-tomato").hidden=!found;
+  $("toc").innerHTML=TOC.filter(t=>!$(t[0]).hidden)
+    .map(t=>'<a href="#'+t[0]+'">'+t[1]+'</a>').join("");
   dirty();
 }
-// The line beside the Save button. hold=ms keeps a result visible for that
-// long before the unsaved-count takes the line back.
 function stat(text,bad,hold){
   const s=$("stat");s.textContent=text;s.className=bad?"warn":"mut";
   if(statTimer){clearTimeout(statTimer);statTimer=null;}
   if(hold)statTimer=setTimeout(()=>{statTimer=null;dirty();},hold);
 }
-// What Save would send. Also the single source of truth for whether there is
-// anything to send — the button is disabled whenever this is empty, so the
-// old "Nothing changed." message has nothing left to report.
 function pending(){
   const changes={};
   for(const k in CUR){const f=$("f-"+k);
@@ -973,18 +1032,16 @@ async function load(){
   try{
     const r=await fetch("/api/settings?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
     if(!r.ok){note("Server rejected request.",true);return;}
-    const d=await r.json();render(d.settings||[]);
+    const d=await r.json();render(d.settings||[],!!d.tomato_found);
   }catch(e){note("Dashboard server stopped.",true);}
 }
 async function save(){
   if(SAVING)return;
   const changes=pending();
-  if(!Object.keys(changes).length)return;   // the button is disabled anyway
+  if(!Object.keys(changes).length)return;
   SAVING=true;
-  $("save").disabled=true;$("save").textContent="Saving\u2026";
-  stat("Saving\u2026");
-  // The number inputs' min/max are a convenience; action.sh is the authority
-  // and its message is surfaced as-is on rejection.
+  $("save").disabled=true;$("save").textContent="Saving…";
+  stat("Saving…");
   let j=null,ok=false;
   try{
     const r=await fetch("/api/setconf?t="+encodeURIComponent(TOKEN),{
@@ -996,20 +1053,10 @@ async function save(){
     note((j&&(j.message||j.error))||("HTTP "+r.status),!ok);
   }catch(e){note("Dashboard server stopped.",true);}
   SAVING=false;$("save").textContent="Save";
-  if(ok){
-    // Re-read from the server: what it stored is the truth, not what was typed.
-    await load();
-    stat("\u2713 Saved",false,4000);
-  }else{
-    // Values stay as typed so the rejected one can be fixed, and the rows stay
-    // marked. The toast carries the reason; this line just holds the verdict.
-    dirty();stat("Not saved",true);
-  }
+  if(ok){await load();stat("Saved",false,4000);}
+  else{dirty();stat("Not saved",true);}
 }
-// --- break menu ------------------------------------------------------------
-// Reads its own endpoint, writes through action.sh like everything else here.
-// The swatch is the same name-derived colour the overlay draws, so a playlist
-// looks the same in both places without either of them storing a colour.
+// --- playlists, reminders list, calendar -----------------------------------
 let PLS=[],PSEEN="",RLNAME="";
 function plHue(t){let h=0;for(let i=0;i<t.length;i++)h=(h*31+t.charCodeAt(i))%360;return h;}
 function plTile(t){const h=plHue(t);
@@ -1035,15 +1082,13 @@ async function loadBreak(force){
     RLNAME=d.reminders_list||"";
     paintRender(d);
     if(d.paint_days)$("pd-days").textContent=String(d.paint_days);
-    // The field is only ever seeded, never overwritten: retyping a name under
-    // someone's cursor because a poll landed is the bug this avoids.
     const rl=$("rl-name");
     if(document.activeElement!==rl&&!rl.dataset.touched)rl.value=RLNAME;
     const j=JSON.stringify(PLS);
     if(!force&&j===PSEEN)return;
     PSEEN=j;
     $("pls").innerHTML=PLS.length?PLS.map(plRow).join("")
-      :'<div class="empty">No playlists yet. Paste a Spotify link below.</div>';
+      :'<div class="empty">No playlists yet.</div>';
   }catch(e){note("Dashboard server stopped.",true);}
 }
 async function breakPost(path,body,verb){
@@ -1067,35 +1112,27 @@ document.addEventListener("click",async e=>{
   const b=e.target.closest("button[data-pl]");
   if(!b)return;
   const uri=b.dataset.uri;
+  const p=PLS.find(x=>x.uri===uri);
   if(b.dataset.pl==="del"){
-    const p=PLS.find(x=>x.uri===uri);
-    if(!confirm("Remove "+(p?p.name:"this playlist")+" from the break menu?"))return;
+    if(!confirm("Remove "+(p?p.name:"this playlist")+"?"))return;
     breakPost("/api/playlist/delete",{uri},"Removing");
   }else{
-    const p=PLS.find(x=>x.uri===uri);
-    // "-" clears the mark, which is what the button says when one is set.
     breakPost("/api/playlist/work",{uri:(p&&p.work)?"-":uri},"Saving");
   }
 });
 $("pl-add").addEventListener("click",async()=>{
   const name=$("pl-name").value.trim(),uri=$("pl-uri").value.trim();
-  if(!name||!uri){note("A name and a Spotify link, please.",true);return;}
+  if(!name||!uri){note("Enter a name and a Spotify link.",true);return;}
   if(await breakPost("/api/playlist/add",{name,uri},"Adding")){
     $("pl-name").value="";$("pl-uri").value="";$("pl-name").focus();
   }
 });
-// --- calendar painting -----------------------------------------------------
-// The dropdown is filled from the helper's own dump, so it can only ever offer
-// calendars that actually exist and can actually be written to. Refresh runs
-// the helper again, which is also how the permission prompt gets raised from
-// here rather than from a Spotlight verb.
 function paintRender(d){
   const sel=$("pc-name"),chosen=d.paint_calendar||"",list=d.paint_choices||[];
-  // Never repaint the control under an open dropdown or a made choice.
   if(document.activeElement===sel||sel.dataset.touched)return;
   sel.innerHTML="";
   const none=document.createElement("option");
-  none.value="";none.textContent=list.length?"— none —":"— run Refresh —";
+  none.value="";none.textContent=list.length?"None":"Press Refresh";
   sel.appendChild(none);
   let found=false;
   for(const c of list){
@@ -1105,18 +1142,16 @@ function paintRender(d){
     if(c.title===chosen){o.selected=true;found=true;}
     sel.appendChild(o);
   }
-  // A calendar that was chosen and has since gone (renamed, account removed)
-  // must still show, or the page would quietly claim nothing is set.
   if(chosen&&!found){
     const o=document.createElement("option");
     o.value=chosen;o.textContent=chosen+"  (not found)";o.selected=true;
     sel.appendChild(o);
   }
-  const note=$("pc-note");
-  if(!list.length)note.textContent="No calendars listed yet — press Refresh, and allow calendar access when macOS asks.";
-  else if(chosen&&!found)note.textContent="“"+chosen+"” is not among your writable calendars any more. Nothing is being painted.";
-  else if(!chosen)note.textContent="Nothing is painted until a calendar is chosen.";
-  else note.textContent="";
+  const n=$("pc-note");
+  if(!list.length)n.textContent="Press Refresh, then allow calendar access when macOS asks.";
+  else if(chosen&&!found)n.textContent="“"+chosen+"” is no longer a calendar you can write to. Nothing is being written.";
+  else if(!chosen)n.textContent="Nothing is written until a calendar is chosen.";
+  else n.textContent="";
 }
 $("pc-name").addEventListener("change",()=>{$("pc-name").dataset.touched="1";});
 $("pc-save").addEventListener("click",async()=>{
@@ -1126,7 +1161,7 @@ $("pc-save").addEventListener("click",async()=>{
 });
 $("pc-refresh").addEventListener("click",async()=>{
   const b=$("pc-refresh");
-  b.disabled=true;b.textContent="Asking\u2026";
+  b.disabled=true;b.textContent="Asking…";
   await breakPost("/api/paint/refresh",{},"Reading your calendars");
   b.disabled=false;b.textContent="Refresh";
   $("pc-name").dataset.touched="";
@@ -1134,47 +1169,39 @@ $("pc-refresh").addEventListener("click",async()=>{
 });
 $("rl-save").addEventListener("click",async()=>{
   const name=$("rl-name").value.trim();
-  if(!name){note("Give the list a name.",true);return;}
+  if(!name){note("Enter a list name.",true);return;}
   if(await breakPost("/api/reminders/list",{name},"Saving"))
     $("rl-name").dataset.touched="";
 });
 $("rl-name").addEventListener("input",()=>{$("rl-name").dataset.touched="1";});
-// Enter in either add field is Add, and must not fall through to the settings
-// Save below — which is what the global Enter handler would otherwise do.
 for(const id of ["pl-name","pl-uri"])
   $(id).addEventListener("keydown",e=>{
     if(e.key==="Enter"){e.preventDefault();e.stopPropagation();$("pl-add").click();}});
 $("rl-name").addEventListener("keydown",e=>{
   if(e.key==="Enter"){e.preventDefault();e.stopPropagation();$("rl-save").click();}});
-
 // --- categories ------------------------------------------------------------
 function dur(s){s=Math.abs(s|0);
 if(s<60)return s+"s";const h=(s/3600)|0,m=((s%3600)/60)|0;
 return h?h+"h "+String(m).padStart(2,"0")+"m":m+"m";}
 function catRow(c){
-  // A key that only survives in the log has nothing left to act on — it is
-  // listed so its hours are accounted for, not so it can be retired twice.
-  const live=c.running?' disabled title="running \u2014 stop the timer first"':"";
-  const acts=c.orphan?'<span class="mut">\u2014</span>':
+  const live=c.running?' disabled title="running: stop the timer first"':"";
+  const acts=c.orphan?'<span class="mut">&nbsp;</span>':
     '<button class="btn" data-cat="hide" data-key="'+escA(c.key)+'"'+live+">"+
       (c.hidden?"Show":"Hide")+"</button>"+
     '<button class="btn danger" data-cat="del" data-key="'+escA(c.key)+'"'+live+
       ">Delete</button>";
   const bits=[c.sessions
-    ?c.sessions+(c.sessions===1?" session":" sessions")+" \u00b7 "+dur(c.total)
+    ?c.sessions+(c.sessions===1?" session":" sessions")+", "+dur(c.total)
     :"nothing logged"];
-  if(c.orphan)bits.push("deleted \u2014 history only");
+  if(c.orphan)bits.push("deleted, history only");
   else if(c.hidden)bits.push("hidden from the launcher");
   return '<div class="crow'+(c.hidden||c.orphan?" off":"")+'">'+
     '<span class="cname">'+esc(c.label)+
       (c.running?' <span class="badge on">live</span>':"")+
       (c.hidden?' <span class="badge">hidden</span>':"")+"</span>"+
     '<span class="cacts">'+acts+"</span>"+
-    '<span class="hint">'+esc(bits.join(" \u00b7 "))+"</span></div>";
+    '<span class="hint">'+esc(bits.join(", "))+"</span></div>";
 }
-// force=true rebuilds the panel even if the data is unchanged, which is how a
-// refused mutation gets its buttons back — the payload it tried to change is
-// identical, and without this the panel would stay disabled.
 async function loadCats(force){
   try{
     const r=await fetch("/api/categories?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
@@ -1182,24 +1209,19 @@ async function loadCats(force){
     const d=await r.json();
     const j=JSON.stringify(d.categories||[]);
     CATS=d.categories||[];
-    // Repainting identical rows every couple of seconds would swallow a click
-    // that lands mid-refresh, so an unchanged list leaves the DOM alone.
     if(!force&&j===SEEN)return;
     SEEN=j;
     $("cats").innerHTML=CATS.length?CATS.map(catRow).join("")
-      :'<div class="empty">No categories yet \u2014 create one with "time new".</div>';
+      :'<div class="empty">No categories yet. Create one with “__VERB__ new”.</div>';
   }catch(e){note("Dashboard server stopped.",true);}
 }
-// The request rebuilds every launcher bundle before it answers, which takes a
-// couple of seconds. Nothing may look unclicked for that long: the row dims and
-// says what it is doing, and the panel refuses further clicks until it lands.
 async function catPost(path,body,btn,verb,c){
   BUSY=true;
   const row=btn.closest(".crow");
   if(row)row.classList.add("pending");
   document.querySelectorAll("#cats button").forEach(x=>{x.disabled=true;});
-  btn.textContent=verb+"\u2026";
-  note(verb+" "+c.label+"\u2026");
+  btn.textContent=verb+"…";
+  note(verb+" "+c.label+"…");
   let j=null;
   try{
     const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{
@@ -1209,8 +1231,6 @@ async function catPost(path,body,btn,verb,c){
     try{j=await r.json();}catch(e){}
     note((j&&(j.message||j.error))||("HTTP "+r.status),!(j&&j.ok));
   }catch(e){note("Dashboard server stopped.",true);}
-  // Unconditional: a failed request has to hand the buttons back, not leave
-  // the panel dead.
   BUSY=false;
   loadCats(true);
 }
@@ -1221,24 +1241,20 @@ document.addEventListener("click",e=>{
     catPost("/api/category/hide",{key:c.key,hidden:!c.hidden},b,
       c.hidden?"Showing":"Hiding",c);return;}
   const nl="\\n";
-  let w="Delete this category?"+nl+nl+c.label+nl+nl+
-    "Its launcher entry goes away and the row moves to categories.deleted.tsv.";
-  // The "shows as the key" half only means anything if there is a name to lose.
+  let w="Delete "+c.label+"?"+nl+nl+
+    "Its launcher entry is removed and the row moves to categories.deleted.tsv.";
   if(c.sessions)w+=nl+nl+c.sessions+" logged session(s) keep their hours"+
-    (c.label!==c.key?", but will show as "+c.key+" instead of the full name.":".");
-  w+=nl+nl+"Hide it instead if you only want it out of the way.";
+    (c.label!==c.key?" but will show as "+c.key+".":".");
+  w+=nl+nl+"Hide it instead if you only want it out of the launcher.";
   if(!confirm(w))return;
   catPost("/api/category/delete",{key:c.key},b,"Deleting",c);
 });
-$("panel").addEventListener("input",dirty);
-$("panel").addEventListener("change",dirty);
+document.addEventListener("input",e=>{if(e.target.closest(".panel[data-sec]"))dirty();});
+document.addEventListener("change",e=>{if(e.target.closest(".panel[data-sec]"))dirty();});
 $("save").addEventListener("click",save);
-document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.tagName!=="BUTTON")save();});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Enter"&&e.target.tagName!=="BUTTON"&&e.target.closest(".panel[data-sec]"))save();});
 load();loadCats();loadBreak();
-// Only the categories poll: a category can appear from "time new" or a timer
-// can start while this page sits open. The settings above are deliberately
-// left alone — re-rendering them would wipe a value you are halfway through
-// typing.
 setInterval(()=>{if(!BUSY){loadCats();loadBreak();}},__POLL__);
 </script></body></html>
 """
@@ -1295,13 +1311,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ctype = "text/html; charset=utf-8"
         elif parsed.path == "/settings":
             body = (SETTINGS_PAGE.replace("__CSS__", THEME_CSS)
-                    .replace("__POLL__", str(POLL_MS)).encode("utf-8"))
+                    .replace("__POLL__", str(POLL_MS))
+                    .replace("__VERB__", VERB).encode("utf-8"))
             ctype = "text/html; charset=utf-8"
         elif parsed.path == "/api/data":
             body = json.dumps(build_payload()).encode("utf-8")
             ctype = "application/json"
         elif parsed.path == "/api/settings":
-            body = json.dumps({"settings": read_settings()}).encode("utf-8")
+            body = json.dumps({
+                "settings": read_settings(),
+                "tomato_found": os.path.exists(TOMATO_FOUND_FILE),
+            }).encode("utf-8")
             ctype = "application/json"
         elif parsed.path == "/api/breakmenu":
             body = json.dumps({"playlists": read_playlists(),
@@ -1580,7 +1600,8 @@ def main(page="/"):
         # Already running (e.g. "time dashboard" invoked twice) — just refocus,
         # on whichever page this launch asked for.
         port, token = existing
-        open_browser(f"http://127.0.0.1:{port}{page}?t={token}")
+        if "--no-open" not in sys.argv[1:]:
+            open_browser(f"http://127.0.0.1:{port}{page}?t={token}")
         return
 
     token = secrets.token_urlsafe(24)
@@ -1598,7 +1619,8 @@ def main(page="/"):
 
     url = f"http://127.0.0.1:{port}{page}?t={token}"
     threading.Thread(target=idle_reaper, args=(httpd,), daemon=True).start()
-    open_browser(url)
+    if "--no-open" not in sys.argv[1:]:
+        open_browser(url)
 
     try:
         httpd.serve_forever()
