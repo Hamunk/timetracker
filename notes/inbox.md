@@ -46,24 +46,24 @@ should just pause when the pause timer enters overtime. So instead of having a
 sound notification, the notification is that spotify goes silent. But again,
 this should be a setting.
 
-## Today's count appears twice
+## The bottom-left counter
 
 for the tomato game it shows the amount grown today two places on the screen.
 One next to the record, and another in the bottom left. Remove the counter in
 the bottom left. Why show it two times?
 
-## Tab for the sidebar, hotkeys in the pause menu
-
-maybe tab can open the sidebar? hotkeys in the pause menu for opening add
-reminder and spotify? customizable via settings ofcourse.
-
-## Bottom left should count clicks, and a graph later
+...and, from a second note on the same counter:
 
 in the tomato game: bottom left should not show total grown tomatoes but
 rather total clicks today. Later on I also want to be able to pull up a graph
 of todays grown tomatoes. X-axis time and y-axis total accumulated tomatoes
 for the day. But Im not sure how I can add this without cluttering the
 interface.
+
+## Tab for the sidebar, hotkeys in the pause menu
+
+maybe tab can open the sidebar? hotkeys in the pause menu for opening add
+reminder and spotify? customizable via settings ofcourse.
 
 ## Do not let the settings page spoil the tomato game
 
