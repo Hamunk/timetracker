@@ -277,6 +277,11 @@ font-variant-numeric:tabular-nums;transition:transform .09s ease}
 #score.pop{transform:scale(1.05)}
 #rate{font-size:1.6vh;letter-spacing:.34em;text-transform:uppercase;opacity:.42;
 font-variant-numeric:tabular-nums}
+/* The score is always every digit. Past nine of them the font steps down so
+   the number stays on one line at any total the day can reach. */
+#score.d10{font-size:7vh}
+#score.d13{font-size:5.4vh}
+#score.d16{font-size:4.2vh}
 #best{font-size:1.4vh;letter-spacing:.1em;text-transform:uppercase;opacity:.34;
 font-variant-numeric:tabular-nums;margin-top:.3vh}
 #away{margin-top:1vh;font-size:1.9vh;color:#ffcf72;opacity:0;
@@ -291,8 +296,14 @@ background:radial-gradient(circle,rgba(229,72,77,.5) 0%,rgba(229,72,77,0) 66%)}
 filter:drop-shadow(0 3vh 6vh rgba(0,0,0,.55));will-change:transform}
 /* the shop: one line per thing, dim until you can afford it */
 #shop{width:36vh;flex:none;padding:5vh 2.6vh;display:flex;flex-direction:column;
-justify-content:center;gap:.7vh;background:rgba(0,0,0,.18);
-border-left:1px solid rgba(255,255,255,.07)}
+justify-content:safe center;gap:.7vh;background:rgba(0,0,0,.18);
+border-left:1px solid rgba(255,255,255,.07);overflow-y:auto;
+overscroll-behavior:contain}
+#shop::-webkit-scrollbar{width:.7vh}
+#shop::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:.4vh}
+/* research: one-off doublers, drawn a step in from the thing they double */
+.item.res{margin-left:2.2vh;border-style:dashed}
+.item.res .n{color:#ffcf72}
 .item{display:flex;align-items:center;gap:1.4vh;padding:1.1vh 1.4vh;
 border-radius:1.2vh;border:1px solid transparent;opacity:.3;cursor:default;
 background:rgba(255,255,255,0);
@@ -943,18 +954,44 @@ noteDraftLoad();
 
    Progress is kept in localStorage where the WebView allows it; where it
    doesn't, a garden simply lasts one break. No network, no libraries. */
+// Twenty rungs. The first eight were the whole ladder when the garden only
+// grew while it was being clicked; now it grows through every work session
+// too, and a day's income climbs to where eight rungs run out by the
+// afternoon. Each rung costs about six times the last and yields about five
+// and a half times, so the tomatoes-per-cost of the top of the ladder is a
+// third of the bottom: the game gets slower as it gets bigger, which is what
+// keeps the next rung worth wanting. The top rung sits under 2^53, where a
+// JavaScript integer is still exact.
 const SHOP=[
-  {k:"seed", e:"🌱", n:"Seedling",           c:15,      ps:.1},
-  {k:"knife",e:"🔪", n:"Sharper knife",      c:60,      cl:1, m:1.4},
-  {k:"pot",  e:"🪴", n:"Windowsill pot",     c:150,     ps:.7},
-  {k:"hand", e:"🧑‍🌾",n:"Gardener",           c:900,     ps:3.4},
-  {k:"trac", e:"🚜", n:"Tractor",            c:5500,    ps:16},
-  {k:"can",  e:"🥫", n:"Cannery",            c:32000,   ps:70},
-  {k:"lab",  e:"🧪", n:"Splice lab",         c:180000,  ps:340},
-  {k:"orb",  e:"🚀", n:"Orbital greenhouse", c:1100000, ps:1800}
+  {k:"seed",  e:"🌱", n:"Seedling",            c:15,      ps:.1},
+  {k:"knife", e:"🔪", n:"Sharper knife",       c:60,      cl:1, m:1.4},
+  {k:"pot",   e:"🪴", n:"Windowsill pot",      c:150,     ps:.7},
+  {k:"hand",  e:"🧑‍🌾",n:"Gardener",            c:900,     ps:3.4},
+  {k:"trac",  e:"🚜", n:"Tractor",             c:5500,    ps:16},
+  {k:"can",   e:"🥫", n:"Cannery",             c:32000,   ps:70},
+  {k:"lab",   e:"🧪", n:"Splice lab",          c:180000,  ps:340},
+  {k:"orb",   e:"🚀", n:"Orbital greenhouse",  c:1100000, ps:1800},
+  {k:"terra", e:"🌍", n:"Terraformer",         c:6.6e6,   ps:9500},
+  {k:"moon",  e:"🌕", n:"Moon farm",           c:4e7,     ps:52000},
+  {k:"mars",  e:"🔴", n:"Mars colony",         c:2.4e8,   ps:280000},
+  {k:"belt",  e:"☄️", n:"Asteroid belt",       c:1.4e9,   ps:1.5e6},
+  {k:"dyson", e:"☀️", n:"Dyson orchard",       c:8.6e9,   ps:8e6},
+  {k:"worm",  e:"🌀", n:"Wormhole express",    c:5.2e10,  ps:4.4e7},
+  {k:"loop",  e:"⏳", n:"Time-loop harvest",   c:3.1e11,  ps:2.4e8},
+  {k:"multi", e:"🪐", n:"Multiverse market",   c:1.9e12,  ps:1.3e9},
+  {k:"sing",  e:"🕳️", n:"Tomato singularity",  c:1.1e13,  ps:7.2e9},
+  {k:"ketch", e:"🧫", n:"Quantum ketchup",     c:6.7e13,  ps:4e10},
+  {k:"bank",  e:"🏛️", n:"Universal seedbank",  c:4e14,    ps:2.2e11},
+  {k:"beyond",e:"🌌", n:"Beyond the garden",   c:2.4e15,  ps:1.2e12}
 ];
+// Research: for every rung, five one-off doublings of that rung's output,
+// each unlocked by owning enough of it. A hundred more things to buy, and
+// the reason a rung you have twenty of is still worth a twenty-first.
+const RESEARCH_AT=[10,25,50,100,200];
+function resCost(it,i){return Math.ceil(it.c*20*Math.pow(5,i));}
+function resLevel(it){return G.up[it.k]||0;}
 const SAVE="tt-tomato-clicker";
-const G={on:false,n:0,earned:0,clicks:0,ps:0,click:1,own:{},parts:[],
+const G={on:false,n:0,earned:0,clicks:0,ps:0,click:1,own:{},up:{},found:false,parts:[],
   raf:0,last:0,s:0,sv:0,gold:null,goldAt:0,saveAt:0,shopAt:0,
   away:0,awaySecs:0,day:null,
   at:Date.now()/1000};   // wall clock through which growth has been paid
@@ -988,7 +1025,7 @@ function hsave(){try{localStorage.setItem(HSAVE,JSON.stringify(HIST));}catch(e){
 // exact same thing.
 function rollDay(day){
   if(G.earned>0){HIST[day]=Math.max(HIST[day]||0,Math.floor(G.earned));hsave();recalcBest();}
-  G.n=0;G.earned=0;G.clicks=0;G.own={};G.click=1;recalc();
+  G.n=0;G.earned=0;G.clicks=0;G.own={};G.up={};G.click=1;recalc();
 }
 
 // Growth is owed for elapsed time, not for frames drawn. Nothing of ours
@@ -1030,6 +1067,7 @@ function gload(){
     return;
   }
   G.n=r.n;G.earned=r.earned||r.n;G.own=r.own||{};
+  G.up=r.up||{};G.found=!!r.found;
   // Absent from every save written before the corner counted clicks, and a
   // day already under way is not worth reconstructing: it starts at nought
   // and is right again at the next midnight.
@@ -1045,7 +1083,8 @@ function gload(){
 }
 function gsave(){try{
   localStorage.setItem(SAVE,JSON.stringify(
-    {n:G.n,earned:G.earned,clicks:G.clicks,own:G.own,at:G.at,day:G.day}));
+    {n:G.n,earned:G.earned,clicks:G.clicks,own:G.own,up:G.up,found:G.found,
+     at:G.at,day:G.day}));
 }catch(e){}}
 
 // Manual version of the same rollover: banks today's run as today's score
@@ -1057,21 +1096,29 @@ function manualReset(){
   shopSync();paintGame();
 }
 
-// Thin spaces below a million, then a suffix — the number has to stay one
-// glance wide next to a 9vh font.
+// Every digit, grouped in threes with a thin space. It used to switch to
+// "1.2B" past a million; that was decided when the font was the constraint,
+// and it is the wrong trade for a counter whose whole pleasure is watching
+// it get long. The font steps down instead (see #score.d10 and friends).
 function num(v){
   v=Math.floor(v);
-  if(v<1e6)return String(v).replace(/\B(?=(\d{3})+$)/g,"\u2009");
-  for(const u of [[1e12,"T"],[1e9,"B"],[1e6,"M"]])
-    if(v>=u[0])return (v/u[0]).toFixed(v/u[0]<10?2:1)+u[1];
-  return String(v);
+  return String(v).replace(/\B(?=(\d{3})+$)/g,"\u2009");
 }
 function cost(it){return Math.ceil(it.c*Math.pow(it.m||1.15,G.own[it.k]||0));}
+// A rate: one decimal while it is small, every digit once it is not.
+function rate(v){return v<10?v.toFixed(1):num(v);}
 function recalc(){
   let ps=0,cl=1;
   for(const it of SHOP){const q=G.own[it.k]||0;if(!q)continue;
-    if(it.ps)ps+=it.ps*q;if(it.cl)cl+=it.cl*q;}
-  G.ps=ps;G.click=cl+ps*.05;      // clicking keeps up a little as it scales
+    const m=Math.pow(2,resLevel(it));
+    if(it.ps)ps+=it.ps*q*m;if(it.cl)cl+=it.cl*q*m;}
+  G.ps=ps;
+  // A click is the knives plus a twentieth of a second's growth, so clicking
+  // stays worth doing at any scale. That second term is why twenty-one
+  // knives read as forty per click rather than twenty-two: the extra is the
+  // garden's own rate, and the scoreboard now prints the total so the number
+  // on the float matches something on screen.
+  G.click=cl+ps*.05;
 }
 
 // The break, and only a break with time left on it. Once it runs over the
@@ -1177,6 +1224,14 @@ function shopBuild(){
     d.addEventListener("click",()=>buy(it));
     d.addEventListener("animationend",()=>d.classList.remove("flash","new"));
     d.style.display="none";it.el=d;box.appendChild(d);
+    // Its research row, right under it. One row per rung, re-labelled as
+    // each level is bought, hidden until the next level is unlocked.
+    const r=document.createElement("div");r.className="item res";
+    r.innerHTML='<div class="e">🔬</div><div class="b"><div class="n"></div>'
+      +'<div class="c"></div></div><div class="q"></div>';
+    r.addEventListener("click",()=>buyRes(it));
+    r.addEventListener("animationend",()=>r.classList.remove("flash","new"));
+    r.style.display="none";it.rel=r;box.appendChild(r);
   }
 }
 function shopSync(){
@@ -1190,11 +1245,35 @@ function shopSync(){
     }
     const can=G.n>=c;
     if(can!==el.classList.contains("can"))el.classList.toggle("can",can);
-    const ct=num(c)+(it.ps?"  ·  "+it.ps+"/s":"  ·  +"+it.cl+" per click");
+    const m=Math.pow(2,resLevel(it));
+    const ct=num(c)+(it.ps?"  ·  "+rate(it.ps*m)+"/s":"  ·  +"+(it.cl*m)+" per click");
     if(el._c!==ct){el._c=ct;el.querySelector(".c").textContent=ct;}
     const qt=q?String(q):"";
     if(el._q!==qt){el._q=qt;el.querySelector(".q").textContent=qt;}
+    // Research: the next level, if there is one and it is unlocked.
+    const lv=resLevel(it),rel=it.rel;
+    const open=lv<RESEARCH_AT.length&&q>=RESEARCH_AT[lv];
+    if(!open){rel.style.display="none";continue;}
+    if(rel.style.display==="none"){rel.style.display="";rel.classList.add("new");}
+    const rc=resCost(it,lv),rcan=G.n>=rc;
+    if(rcan!==rel.classList.contains("can"))rel.classList.toggle("can",rcan);
+    const rn=it.n+" ×"+(m*2);
+    if(rel._n!==rn){rel._n=rn;rel.querySelector(".n").textContent=rn;}
+    const rct=num(rc)+"  ·  doubles "+(it.ps?"output":"clicks");
+    if(rel._c!==rct){rel._c=rct;rel.querySelector(".c").textContent=rct;}
+    const rq=lv?"×"+m:"";
+    if(rel._q!==rq){rel._q=rq;rel.querySelector(".q").textContent=rq;}
   }
+}
+function buyRes(it){
+  const lv=resLevel(it);
+  if(lv>=RESEARCH_AT.length||(G.own[it.k]||0)<RESEARCH_AT[lv])return;
+  const c=resCost(it,lv);if(G.n<c)return;
+  G.n-=c;G.up[it.k]=lv+1;recalc();
+  const el=it.rel,r=el.getBoundingClientRect();
+  el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash");
+  splash(r.left+r.width/2,r.top+r.height/2,12,false);
+  shopSync();gsave();
 }
 function buy(it){
   const c=cost(it);if(G.n<c)return;
@@ -1207,8 +1286,13 @@ function buy(it){
 
 /* ---- scoreboard ----------------------------------------------------------- */
 function paintGame(){
-  $("score").textContent=num(G.n);
-  $("rate").textContent=(G.ps?G.ps.toFixed(1):"0")+" per second";
+  const sc=$("score"),digits=String(Math.floor(G.n)).length;
+  sc.textContent=num(G.n);
+  sc.classList.toggle("d10",digits>=10&&digits<13);
+  sc.classList.toggle("d13",digits>=13&&digits<16);
+  sc.classList.toggle("d16",digits>=16);
+  // Both rates, so a float of "+40" has a "40 per click" to be checked against.
+  $("rate").textContent=rate(G.ps)+" per second  ·  "+rate(G.click)+" per click";
   const today=Math.max(HIST[G.day]||0,Math.floor(G.earned));
   $("best").textContent="today "+num(today)+"  ·  best day "+num(Math.max(ALLBEST,today));
   // The corner counts clicks, not tomatoes. It used to show G.earned, which
@@ -1284,6 +1368,9 @@ function openGame(){
   if(G.on||M.on||busy||!playable())return;
   gclear();                       // in case a close was cut short by a reopen
   G.on=true;document.body.classList.add("playing");
+  // Said once. Swift turns it into a file the settings page checks before it
+  // shows the game's own section, so that page never gives the game away.
+  if(!G.found){G.found=true;mpost("game.found");gsave();}
   const g=$("game");g.classList.add("on");
   requestAnimationFrame(()=>g.classList.add("up"));
   recalc();
