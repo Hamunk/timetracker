@@ -186,6 +186,22 @@ end tell" >/dev/null
 # claiming it here means the last word is ours.
 play_uri() {
     : > "$MEDIA_STOP"
+    # Cold, it is launched here first, hidden and in the background, so that
+    # the Apple Event below finds it running and never launches it itself.
+    # An app launched by an Apple Event comes up activated, with a window,
+    # and that is what a video in a browser tab under the overlay reacts to:
+    # the tab sees its occlusion change and a player that paused itself when
+    # the tomato covered it un-pauses because it believes it is visible
+    # again. A paused lecture starting up under a break is the report that
+    # led here. Launched hidden, no window appears and nothing underneath
+    # the overlay changes.
+    if ! running; then
+        /usr/bin/open -g -j -a Spotify >/dev/null 2>&1 || return 0
+        local t=0
+        while ! running && (( t < 80 )); do sleep 0.1; t=$(( t + 1 )); done
+        running || return 0
+        sleep 1     # scriptable a beat after the process exists
+    fi
     osa 8 'on run argv
     tell application "Spotify"
         try
@@ -332,15 +348,17 @@ while :; do
         (( idle > IDLE_MAX )) && break
     fi
 
-    # One state poll per second, but the command file is checked four times
+    # One state poll per second, but the command file is checked ten times
     # in that second: a click has to feel immediate, and asking Spotify for
-    # its state is the expensive half of a tick.
-    for _ in 1 2 3 4; do
+    # its state is the expensive half of a tick. It was four; a quarter
+    # second between a click and anything happening was the lag the panel
+    # was reported for.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
         if take_command; then
             # Something changed; report it without waiting for the next tick.
             poll
         fi
-        sleep 0.25
+        sleep 0.1
     done
 
 done

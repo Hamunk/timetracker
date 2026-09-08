@@ -95,7 +95,16 @@ DEADLINE=8
 # One such tab is enough to stall a sweep past any deadline worth having,
 # which is exactly how this file failed its first real break — the browser
 # pass hit the leash and died having paused nothing.
-PAUSE_JS="(function p(d){try{d.querySelectorAll('video,audio').forEach(function(m){m.pause()});Array.prototype.forEach.call(d.querySelectorAll('iframe'),function(f){try{p(f.contentDocument)}catch(e){}})}catch(e){}})(document)"
+#
+# A cross-origin iframe cannot be walked, but it can be written to:
+# postMessage crosses origins by design, and the two embedded players that
+# account for most lecture video answer to a published message each. YouTube
+# takes {event:'command',func:'pauseVideo'} on an embed created with
+# enablejsapi=1; Vimeo takes {method:'pause'}. A frame that understands
+# neither ignores both, which is the whole risk. It does not reach a player
+# nested inside a tool's own frame (Canvas puts LTI tools one level down),
+# and it was never going to: that frame is the tool's, not the player's.
+PAUSE_JS="(function p(d){try{d.querySelectorAll('video,audio').forEach(function(m){m.pause()});Array.prototype.forEach.call(d.querySelectorAll('iframe'),function(f){try{p(f.contentDocument)}catch(e){}try{var w=f.contentWindow;w.postMessage(JSON.stringify({event:'command',func:'pauseVideo',args:[]}),'*');w.postMessage(JSON.stringify({method:'pause'}),'*')}catch(e){}})}catch(e){}})(document)"
 
 # -x is exact: Chrome's dozen "Google Chrome Helper" processes must not count
 # as Chrome, or we'd script an app that quit.
