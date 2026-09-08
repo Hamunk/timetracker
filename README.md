@@ -14,7 +14,7 @@ plugin.
 ## Install
 
 ```bash
-git clone <this repository>
+git clone https://github.com/Hamunk/timetracker.git
 cd timetracker
 ./spotlight/install.sh
 ```
