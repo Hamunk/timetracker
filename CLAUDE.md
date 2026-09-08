@@ -111,6 +111,12 @@ author. One note is one task.
 
 Moving a note out of the inbox is the author's call, not yours.
 
+When the owner asks for the whole inbox at once, one branch for all of it,
+`next`, with one commit per note in dependency order. Fifteen interlocking
+changes on fifteen branches spend the day on merge conflicts instead of on
+the work; one branch keeps every note reviewable on its own commit and lets
+a settings row added for one note be read by the next.
+
 ## Style
 
 Read three neighbouring functions before writing one. This codebase argues

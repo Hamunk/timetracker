@@ -89,3 +89,33 @@ before Esc actually escapes the miniplayer.
 right now Esc and clicking the x is the only way to get out of the mini
 applets in the menu. How about adding clicking outside the applet region also
 exits the applet?
+
+## Clean up claudish from the user-facing interfaces
+
+Clean up claudish from the user facing interfaces. I.e remove EM dashes and
+unnecessary text.
+
+(Later, in conversation: README and docs too. Keep the Dijkstra epigraphs,
+remove the other claudish stuff.)
+
+## Rebalance the tomato gathering mechanics
+
+rebalance the tomato gathering mechanics. The intial mechanics were based on
+only active play, but we have expanded the passive income to also gather
+tomatoes in the background when the user is in a working session. Right now
+the progress halts after getting like 15 orbital greenhouses. Add MANY more
+development steps!
+
+## Structure the settings page
+
+structure the settings page. Right now its a big mess. I want structure!
+
+## Ready to publish
+
+Remember that the goal is to publish this app, so dont put my credentials
+anywhere. Also make sure the structure is in a way that allows me to
+distribute the software to others later on. That includes creating startup
+wizard and guide etc.
+
+(In conversation: stay a clone-and-install tool, with the wizard in the
+dashboard.)
