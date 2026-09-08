@@ -185,7 +185,13 @@ transition:color .13s ease,transform .1s ease}
 .trb.main svg{width:2.4vh;height:2.4vh}
 .trb[disabled]{opacity:.3;cursor:default;pointer-events:none}
 
-.volrow{display:flex;align-items:center;gap:1.2vh;padding:0 1.8vh 1.8vh}
+/* Volume sits last, under its own label, with a rule above it. It used to
+   sit directly under the transport buttons, where a horizontal slider reads
+   as a scrubber: next to skip and play, anything long and thin is time. */
+.volrow{display:flex;align-items:center;gap:1.2vh;padding:1.3vh 1.8vh 1.6vh;
+border-top:1px solid rgba(255,255,255,.07);flex:none}
+.volrow .vlabel{font-size:1.35vh;letter-spacing:.16em;text-transform:uppercase;
+color:#b3b3b3;flex:none;margin-right:.4vh}
 .volrow svg{width:2vh;height:2vh;color:#b3b3b3;flex:none}
 /* A real range input, dressed as Spotify's: grey track, white fill, knob
    only on hover, and the fill turns green while you are actually on it. */
@@ -438,12 +444,12 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
       <button class="trb main" id="splay" title="Play/Pause"><svg id="splayi"><use href="#i-play"/></svg></button>
       <button class="trb" id="snext" title="Next"><svg><use href="#i-next"/></svg></button>
     </div>
-    <div class="volrow"><svg><use href="#i-vol"/></svg>
-      <input id="vol" type="range" min="0" max="100" step="1" value="50"
-             aria-label="Volume"></div>
     <div class="plhead"><span>Playlists</span><em id="plcount"></em></div>
     <div id="pllist"></div>
     <div class="plwork" id="plwork"></div>
+    <div class="volrow"><span class="vlabel">Volume</span><svg><use href="#i-vol"/></svg>
+      <input id="vol" type="range" min="0" max="100" step="1" value="50"
+             aria-label="Volume"></div>
   </div>
   <div id="mnote" class="mview">
     <div class="mhead">
@@ -554,12 +560,12 @@ const TIPS={
   tomato:'<kbd>&crarr;</kbd>take the break<br><kbd>esc</kbd>snooze it'+
     '<span class="note">No answer takes the break after {S}s. Skipping counts '+
     'the pomodoro and starts the next one.</span>',
-  break:'<kbd>&crarr;</kbd>back to work'+
-    '<span class="note">The break ends when you end it — the clock keeps '+
-    'counting and anything past the scheduled end is logged as overrun.</span>',
-  breakover:'<kbd>&crarr;</kbd>back to work'+
-    '<span class="note">Time past the scheduled end is logged as break '+
-    'overrun on this session.</span>'
+  break:'<kbd>&crarr;</kbd>back to work<br><kbd>{K}</kbd>menu'+
+    '<span class="note">The break ends when you end it. Time past the '+
+    'scheduled end is logged as overrun.</span>',
+  breakover:'<kbd>&crarr;</kbd>back to work<br><kbd>{K}</kbd>menu'+
+    '<span class="note">Time past the scheduled end is logged as overrun '+
+    'on this session.</span>'
 };
 
 function build(v){
@@ -571,7 +577,8 @@ function build(v){
   $("big").className="";
   // auto_accept_seconds, straight from settings via Swift.
   const secs=(st&&st.autosec>0)?st.autosec:60;
-  $("tip").innerHTML=(TIPS[v]||"").replace("{S}",secs);
+  $("tip").innerHTML=(TIPS[v]||"").replace("{S}",secs)
+    .replace("{K}",keyLabel(keyset().menu));
   if(v==="tomato"){
     $("big").textContent="";
     btn("Skip","ghost",explode);
@@ -654,18 +661,33 @@ window.ttSetState=function(json){
 };
 
 document.addEventListener("keydown",e=>{
+  const K=keyset();
   // The menu owns the keyboard while it is open, and that is not a nicety:
   // Enter ends the break, and a note is a thing you press Enter inside of.
   if(M.on){
     if(e.key==="Escape"){e.preventDefault();menuBack();return;}
     if(document.activeElement===$("ntext")){
       // Cmd/Ctrl+Enter saves; a plain Enter is a new line and nothing else.
-      if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();noteSave();}
+      // The menu key still closes: Tab is not a character anyone types into
+      // a note, and a letter chosen as the menu key would be, so a letter
+      // is left alone here and only Tab or Space get through.
+      if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();noteSave();return;}
+      if((K.menu==="Tab"||K.menu==="Space")&&keyIs(e,K.menu)){
+        e.preventDefault();menuClose();}
       return;
     }
-    if(e.key==="Enter")e.preventDefault();
+    if(keyIs(e,K.menu)){e.preventDefault();menuClose();return;}
+    if(M.view==="home"){
+      const feat=String(st.menu||"");
+      if(keyIs(e,K.sp)&&feat.includes("spotify")){e.preventDefault();menuShow("sp");return;}
+      if(keyIs(e,K.note)&&feat.includes("reminders")){e.preventDefault();menuShow("note");return;}
+    }
+    if(e.key==="Enter"||e.key==="Tab")e.preventDefault();
     return;
   }
+  // The menu key opens the menu from the break screen, and from inside the
+  // game: the game is closed first, since one thing is on screen at a time.
+  if(keyIs(e,K.menu)&&menuAllowed()){e.preventDefault();menuOpen();return;}
   // Playing swallows both keys: a stray Enter mid-click-frenzy must not end
   // the break. Stepping out first, then Enter, still does.
   if(G.on){
@@ -697,6 +719,19 @@ function mpost(a){
   try{window.webkit.messageHandlers.menu.postMessage(a);}
   catch(e){console.log("menu:",a);}
 }
+// The break screen's keys, from settings by way of the watcher and Swift.
+// A letter matches either case; Tab and Space are named.
+function keyset(){
+  const p=String((st&&st.keys)||"Tab,s,n").split(",");
+  return {menu:p[0]||"Tab",sp:p[1]||"s",note:p[2]||"n"};
+}
+function keyIs(e,name){
+  if(!name)return false;
+  if(name==="Tab")return e.key==="Tab";
+  if(name==="Space")return e.key===" ";
+  return e.key.length===1&&e.key.toLowerCase()===name.toLowerCase();
+}
+function keyLabel(name){return name==="Space"?"space":name==="Tab"?"tab":name;}
 function menuAllowed(){
   return !!st&&typeof st.menu==="string"&&st.menu!=="-"&&
          (view==="break"||view==="breakover")&&!busy;
@@ -733,6 +768,10 @@ function menuClose(instant){
   M.on=false;
   if(M.view==="sp")mpost("sp.close");
   noteDraftSave();
+  // The note box keeps focus after the panel is gone, and a focused note box
+  // swallows every key that is not Enter. Nothing on the break screen would
+  // answer the menu key again until something else was clicked.
+  $("ntext").blur();
   M.view="home";
   document.body.classList.remove("menuing");
   const m=$("menu");m.classList.remove("up");
@@ -807,6 +846,15 @@ function paintSpotify(){
   if(!M.on||M.view!=="sp")return;
   const sp=st&&st.sp,t=$("nptrack"),a=$("npartist");
   let dim=true,playing=false,live=false;
+  // A playlist was just chosen: hold the "Starting" line until the track
+  // changes from whatever was on at the click, or for six seconds. "Playing"
+  // alone is not the signal: a player already on something reports that
+  // something for a second or two before the new list arrives.
+  if(M.startAt&&Date.now()-M.startAt<6000&&
+     !(sp&&sp.state==="playing"&&sp.track&&sp.track!==M.startTrack)){
+    paintPlaylists();return;
+  }
+  M.startAt=0;
   if(!sp){
     // The agent is a separate process and takes a moment to be launched and
     // answer. Saying so beats saying something wrong for that moment.
@@ -914,11 +962,30 @@ function paintNote(){
 
 /* ---- wiring ---- */
 $("burger").addEventListener("click",()=>{M.on?menuClose():menuOpen();});
+// A click anywhere that is not the menu closes it. The stage underneath has
+// pointer-events off while the menu is up, so the click lands on the body
+// and reaches here; a click inside the panel or on the burger does not.
+document.addEventListener("click",e=>{
+  if(!M.on)return;
+  if(e.target.closest("#menu")||e.target.closest("#burger"))return;
+  menuClose();
+});
 $("menu").addEventListener("click",e=>{
   const go=e.target.closest("[data-go]");
   if(go){ go.dataset.go==="home"?menuBack():menuShow(go.dataset.go); return; }
   const pl=e.target.closest("[data-pl]");
-  if(pl){ mpost("sp.play."+pl.dataset.pl); return; }
+  if(pl){
+    // Say so now. Starting a playlist is a launch when Spotify is closed,
+    // and the poll that would confirm it is a second or more behind: a row
+    // that does nothing for that long reads as a click that missed.
+    const nm=pl.querySelector(".nm");
+    M.startAt=Date.now();M.startName=nm?nm.textContent:"";
+    M.startTrack=(st&&st.sp&&st.sp.track)||"";
+    $("nptrack").textContent="Starting "+M.startName+"…";
+    $("nptrack").className="dim";$("npartist").textContent="";
+    mpost("sp.play."+pl.dataset.pl);
+    return;
+  }
 });
 $("sprev").addEventListener("click",()=>mpost("sp.prev"));
 $("snext").addEventListener("click",()=>mpost("sp.next"));

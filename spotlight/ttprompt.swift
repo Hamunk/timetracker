@@ -8,7 +8,7 @@
 //       "POMODORO<TAB><text>" or "<TAB><text>" (empty on skip).
 //
 //   ttprompt overlay <choice_path> <long_break_every> [auto_accept_seconds]
-//                     [easter_egg] [menu_features]
+//                     [easter_egg] [menu_features] [keys]
 //       The full-screen tomato. ONE process covers a whole visible stretch
 //       of the cycle — tomato, then break, then break-over — rather than one
 //       process per phase: it polls the `pomodoro` file beside the choice
@@ -27,10 +27,11 @@
 // "running but invisible") and *reads* `pomodoro` and `.tomato-audio` from
 // that directory.
 //
-// The break menu adds three more writes to that list and no more, all with
+// The break menu adds four more writes to that list and no more, all with
 // fixed names in the same validated directory: .tomato-spotify-want (exists
 // while the music panel is open), .tomato-spotify-cmd (one command for the
-// Spotify agent) and .tomato-reminder (one note for the EventKit helper). It
+// Spotify agent), .tomato-reminder (one note for the EventKit helper) and
+// .tomato-found (the easter egg has been opened at least once). It
 // reads .tomato-spotify, .tomato-reminder-result, spotify-playlists.tsv and
 // reminders-list from the same place. It still launches nothing and still
 // touches no network: every action leaves here as a file, and pomodoro-watch.sh
@@ -95,6 +96,10 @@ let egg = a.count > 5 ? (a[5] != "off") : true
 // already checked the settings, the app bundles and whether Spotify is even
 // installed, so this is a list of things that work, not of things enabled.
 let feat = a.count > 6 ? a[6] : "-"
+// The break screen's keys, "menu,spotify,reminder", straight from settings
+// via the watcher. Passed through to the page untouched: what a key does is
+// the page's business, and this only carries it.
+let keys = a.count > 7 ? a[7] : "Tab,s,n"
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
@@ -102,6 +107,7 @@ final class P: NSPanel { override var canBecomeKey: Bool { true } }
 
 final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     let dir: String; let cyc: Int; let secs: Int; let egg: Bool; let feat: String
+    let keys: String
     var panel: NSPanel!; var wv: WKWebView!
     var loaded = false; var pending = false
     // The playlist file is re-read only when it changes. It is read on the
@@ -110,9 +116,9 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
     var playlists: [Playlist] = []
     var plStamp: Date? = nil
     var plSeen = false
-    init(dir: String, cyc: Int, secs: Int, egg: Bool, feat: String) {
+    init(dir: String, cyc: Int, secs: Int, egg: Bool, feat: String, keys: String) {
         self.dir = dir; self.cyc = cyc; self.secs = secs; self.egg = egg
-        self.feat = feat
+        self.feat = feat; self.keys = keys
     }
 
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { loaded = true; sync() }
@@ -152,6 +158,12 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
             return
         case "note.clear":
             try? fm.removeItem(atPath: path(".tomato-reminder-result"))
+            return
+        case "game.found":
+            // The settings page shows the game's section only once this
+            // exists. Not gated on anything: finding the game is the one
+            // thing the page is allowed to say on its own behalf.
+            fm.createFile(atPath: path(".tomato-found"), contents: Data())
             return
         default:
             break
@@ -264,7 +276,7 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
         var payload: [String: Any] = [
             "phase": f[0], "target": target, "completed": done, "overrun": over,
             "cycle": cyc, "autosec": secs, "audio": audio, "egg": egg,
-            "cycleStart": cycleStart, "menu": feat
+            "cycleStart": cycleStart, "menu": feat, "keys": keys
         ]
         if feat.contains("spotify") {
             loadPlaylists()
@@ -333,6 +345,7 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
                 self.beat()
             }
             if !self.panel.isKeyWindow { self.panel.makeKey() }
+            if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
         }
     }
 }
@@ -406,7 +419,7 @@ if mode == "prompt" {
              path: resultPath(a.count > 4 ? a[4] : nil, expected: ".prompt-answer"),
              ticked: a.count > 5 && a[5] == "1")
 } else {
-    del = D(dir: dir, cyc: cyc, secs: secs, egg: egg, feat: feat)
+    del = D(dir: dir, cyc: cyc, secs: secs, egg: egg, feat: feat, keys: keys)
 }
 app.delegate = del
 app.run()
