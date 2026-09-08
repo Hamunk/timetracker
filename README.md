@@ -3,6 +3,17 @@
 > *Simplicity is prerequisite for reliability.*
 > — Edsger W. Dijkstra, EWD498
 
+## Quickstart
+
+```bash
+git clone https://github.com/Hamunk/timetracker.git && cd timetracker && ./spotlight/install.sh
+```
+
+Needs macOS and the Xcode command line tools (`xcode-select --install`). The
+installer opens a setup page in your browser the first time.
+
+## What it is
+
 A record of when you worked and on what, kept in a tab-separated file, driven
 from the launcher you already use. It depends on nothing that does not ship
 with macOS.
@@ -13,15 +24,8 @@ plugin.
 
 ## Install
 
-```bash
-git clone https://github.com/Hamunk/timetracker.git
-cd timetracker
-./spotlight/install.sh
-```
-
-The pomodoro screen needs the Xcode command line tools
-(`xcode-select --install`). Without them the tracker installs and works, and
-pomodoro mode is not offered.
+The pomodoro screen needs the Xcode command line tools. Without them the
+tracker installs and works, and pomodoro mode is not offered.
 
 The first install opens a setup page in your browser: name your first
 categories, choose whether pomodoro mode is on by default, and grant the three

@@ -109,7 +109,9 @@ author. One note is one task.
    owner's, and they are the only two that reach the install being used for
    real work.
 
-Moving a note out of the inbox is the author's call, not yours.
+When a note has been done and reported, remove it from the inbox. The commit
+is its record; an inbox that still lists finished work is a list nobody can
+trust.
 
 When the owner asks for the whole inbox at once, one branch for all of it,
 `next`, with one commit per note in dependency order. Fifteen interlocking
