@@ -85,6 +85,7 @@ target=$(( seg + $(tt_setting_secs pomodoro_minutes) ))
 count=0
 over=0
 nudged=0
+overran=0
 hushed=0
 silent=0
 last_audio=0
@@ -166,6 +167,7 @@ launch_overlay() {
     "$HELPER_BIN" overlay "$CHOICE_FILE" "$(tt_setting long_break_every)" \
         "$(tt_setting auto_accept_seconds)" "$(tt_setting easter_egg)" \
         "$(menu_features)" \
+        "$(tt_setting key_menu),$(tt_setting key_spotify),$(tt_setting key_reminder)" \
         >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$OVERLAY_PID"
 }
@@ -303,6 +305,17 @@ resume_music() {
     fi
 }
 
+# A break has run past its end while music the break menu started is still
+# playing: pause it. The silence is the notification, and it is the one kind
+# that reaches someone who wandered off with headphones on. Only music this
+# break started, by the same marker resume_music reads, and the marker is
+# left in place, so "I'm back" still puts the work playlist on afterwards.
+hush_overrun() {
+    [[ "$(tt_setting spotify_pause_on_overrun)" == "on" ]] || return 0
+    [[ -f "$SPOT_PLAYED" ]] || return 0
+    spotify_command "pause"
+}
+
 # One captured note, handed to the EventKit helper. The helper consumes the
 # request file itself and leaves its verdict in $REM_RESULT, which the overlay
 # reads back — so a denied permission shows up in the panel as a refusal
@@ -353,6 +366,7 @@ do_accept() {
     phase=BREAK
     target=$(( at + len ))
     nudged=0
+    overran=0
     write_pomo
 }
 
@@ -441,6 +455,12 @@ while :; do
             *) : ;;   # stale or mismatched choice — ignore
         esac
         continue      # re-read immediately; no nap between phases
+    fi
+
+    # The break's end has passed. Once per break, on the tick it happens.
+    if [[ "$phase" == "BREAK" ]] && (( now >= target )) && (( overran == 0 )); then
+        overran=1
+        hush_overrun
     fi
 
     # Is the overlay meant to be on screen? One process covers the whole
