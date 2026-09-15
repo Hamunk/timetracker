@@ -118,6 +118,15 @@ make_app() {
 
     mkdir -p "$macos_dir"
 
+    # LSArchitecturePriority, because the executable is a script. There is no
+    # Mach-O header for LaunchServices to read an architecture from, so on
+    # Apple Silicon it assumes Intel and starts the whole bundle under Rosetta.
+    # For bash and every other system binary that is invisible. For
+    # /usr/bin/python3 it is not: that is an xcrun shim, the shim loads
+    # libxcrun from the Command Line Tools, and once a CLT update shipped that
+    # library arm64-only, "time dashboard" failed in dlopen before Python
+    # started, with its output sent to /dev/null and nothing on screen to say
+    # so. x86_64 stays in the list for an Intel Mac, where arm64 is skipped.
     cat > "$app_path/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -141,6 +150,11 @@ make_app() {
 	<string>1</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>LSArchitecturePriority</key>
+	<array>
+		<string>arm64</string>
+		<string>x86_64</string>
+	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.13</string>
 	<key>NSHighResolutionCapable</key>
