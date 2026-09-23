@@ -60,9 +60,14 @@ adds on this machine: it is the one socket anything here listens on. (Messages,
 | Fixed routes, no path handling | Path traversal, directory listing |
 | Mutations are POST-only and need the token in an `X-TimeTracker-Token` header, `Content-Type: application/json`, and a matching `Origin` | CSRF: a cross-origin page can send none of those without a preflight, and `OPTIONS` is never answered |
 | The server never writes; mutations shell out to `action.sh` with an argv list | Bypassing the lock; shell interpretation of logged text |
-| CSP `default-src 'none'`, `nosniff`, `no-referrer` | Token leaking via Referer; the page loading remote resources |
+| CSP `default-src 'none'` with inline style and script, `connect-src 'self'` and `img-src data:`; `nosniff`, `no-referrer` | Token leaking via Referer; the page loading remote resources |
 | Token file mode 600 | Other local accounts reading the token |
 | Idle shutdown after ten minutes | An unattended server lingering |
+
+`img-src data:` is there for one image, the dropdown arrow, which the CSS
+draws as an inline SVG. Without it `default-src 'none'` blocked the arrow
+too. It admits nothing remote: a `data:` image carries its own bytes, and an
+SVG loaded as an image runs no script and loads nothing further.
 
 Residual risks:
 

@@ -1698,9 +1698,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # img-src data: is for the <select> arrow, the only image on any page,
+        # drawn as an inline SVG in the CSS. Without it default-src 'none'
+        # blocks that too and every dropdown loses its arrow. A data: image
+        # carries its bytes with it, so this admits nothing from the network,
+        # and an SVG used as an image runs no script and loads nothing further.
         self.send_header("Content-Security-Policy",
                          "default-src 'none'; style-src 'unsafe-inline'; "
-                         "script-src 'unsafe-inline'; connect-src 'self'")
+                         "script-src 'unsafe-inline'; connect-src 'self'; "
+                         "img-src data:")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
