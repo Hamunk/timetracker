@@ -55,9 +55,9 @@ tt_setting_spec() {
         reminders)          TT_DEF=on ;;
         # The third tool, and the only one off until you say otherwise: it is
         # the one thing in TimeTracker that talks to the internet. On, every
-        # break connects to the relay for each friend you have paired, so that
-        # friends on a break at the same moment can see you and write to you.
-        # With no friends it connects to nothing. See SECURITY.md, "Break chat".
+        # break collects what your friends wrote while you worked, and every
+        # change of phase tells them where you now are. With no friends it
+        # connects to nothing. See SECURITY.md, "Messages".
         chat)               TT_DEF=off ;;
         # What happens to the music when you press "I'm back". On: the work
         # playlist (the one marked `work` in spotify-playlists.tsv) starts and

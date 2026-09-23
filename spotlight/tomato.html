@@ -299,6 +299,7 @@ vertical-align:-.2vh;margin-right:.7vh;animation:nspin .8s linear infinite}
 .chsub{font-size:1.4vh;color:rgba(246,239,233,.45);white-space:nowrap;
 overflow:hidden;text-overflow:ellipsis;min-width:0}
 .chsub.on{color:#68d391}
+.chsub.work{color:rgba(246,239,233,.7)}
 #chfriends{padding:.8vh .8vh 0;overflow-y:auto;overscroll-behavior:contain;
 max-height:44vh}
 .chf{display:flex;align-items:center;gap:1.3vh;padding:1vh;border-radius:1vh;
@@ -310,11 +311,13 @@ font-size:1.7vh;font-weight:600;color:#fff}
 .chav i{position:absolute;right:-.15vh;bottom:-.15vh;width:1.15vh;height:1.15vh;
 border-radius:50%;background:#68d391;border:.25vh solid #151515;display:none}
 .chf.on .chav i{display:block}
+.chf.work .chav i{display:block;background:#e5484d}
 .chft{min-width:0;flex:1;display:flex;flex-direction:column;gap:.2vh}
 .chft b{font-size:1.8vh;font-weight:500;white-space:nowrap;overflow:hidden;
 text-overflow:ellipsis}
 .chft span{font-size:1.4vh;color:rgba(246,239,233,.45)}
 .chf.on .chft span{color:#68d391}
+.chf.work .chft span{color:rgba(246,239,233,.7)}
 .chn{flex:none;min-width:2.2vh;height:2.2vh;border-radius:1.1vh;padding:0 .65vh;
 background:#e5484d;color:#fff;font-size:1.3vh;font-weight:600;
 display:flex;align-items:center;justify-content:center}
@@ -357,7 +360,8 @@ user-select:text;-webkit-user-select:text}
 .chin input::placeholder,#chform input::placeholder{color:rgba(246,239,233,.32)}
 .chin input:focus,#chform input:focus{outline:none;
 border-color:rgba(246,239,233,.4);background:rgba(255,255,255,.08)}
-.chin input[disabled]{opacity:.5}
+.chhint{padding:.7vh 1.6vh 0;font-size:1.3vh;line-height:1.5;
+color:rgba(246,239,233,.45);min-height:1.9vh}
 .chbtn{flex:none;font:inherit;font-size:1.6vh;font-weight:600;padding:.9vh 1.8vh;
 border-radius:1vh;border:0;cursor:pointer;background:#e5484d;color:#fff;
 transition:background .13s ease,opacity .13s ease}
@@ -606,6 +610,7 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
       <div class="chin"><input id="chtext" type="text" maxlength="500"
         spellcheck="false" autocomplete="off"><button class="chbtn" id="chsend"
         disabled>Send</button></div>
+      <div class="chhint" id="chhint"></div>
       <div class="chmore"><span id="chcopy">Copy their code</span><span
         id="chforget">Remove</span></div>
       <div class="chline" id="chconvline"></div>
@@ -623,9 +628,10 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
             spellcheck="false" autocomplete="off">
           <button class="chbtn" id="chjoin">Add</button>
         </div>
-        <div class="chhelp">One of you makes a code and sends it to the other
-          on Signal. After that you can write to each other whenever you are
-          both on a break, and at no other time.</div>
+        <div class="chhelp">One of you makes a code and sends it to the other,
+          privately. After that you can write to each other at any time, and
+          see where the other is in their pomodoro. A message waits until
+          their next break.</div>
       </div>
       <div id="chstat"></div>
     </div>
@@ -1165,23 +1171,24 @@ function paintNote(){
 }
 
 /* ---- messages ----
-   Friends who are on a break at the same moment you are, and nobody else.
-   The chat helper holds the codes and the connections; this panel is sent
-   who your friends are, by an id that is not a secret, which of them are on
-   a break, and what this break's messages have been. It answers with an id
-   and some text. The one secret that can pass through here is a code you
-   paste in yourself, on its way to the helper.
+   Your friends, where each of them is in their pomodoro, and what you have
+   said to each other. The chat helper holds the codes, the connections and
+   the history; this panel is sent who your friends are, by an id that is not
+   a secret, where they are, and the latest of what was said. It answers with
+   an id and some text. The one secret that can pass through here is a code
+   you paste in yourself, on its way to the helper.
 
-   Nothing is kept. The helper deletes the break's messages when the break
-   ends, and this page is gone by then too. */
-const CH={state:null,ver:0,drawn:"",sub:"list",friend:"",seen:{},run:"",
+   A message can be written to anyone at any time. It waits on the relay and
+   arrives at their next break, the way theirs to you arrive at yours: this
+   screen is where a work session's messages are read, never during it. */
+const CH={state:null,ver:0,drawn:"",sub:"list",friend:"",readSent:{},run:"",
   noteQ:-1,pending:[],armed:0,addBusy:0,stick:false,lineT:null};
 
 function chatIngest(c){
   if(c&&c.run!==CH.run){
-    // A new helper, so a new break's worth of numbering. A note it came up
-    // with is last break's answer, unless this page is waiting on one.
-    CH.run=c.run;CH.seen={};CH.pending=[];
+    // A new helper: its note numbering starts again. A note it came up with
+    // is an old answer, unless this page is waiting on one.
+    CH.run=c.run;CH.pending=[];
     CH.noteQ=(c.note&&!CH.addBusy)?c.note.q:-1;
   }
   CH.state=c||null;CH.ver++;
@@ -1190,9 +1197,14 @@ function chatIngest(c){
 function chatFriend(id){
   return ((CH.state&&CH.state.friends)||[]).find(f=>f.id===id)||null;
 }
+// The helper's count, unless this page has since shown more than it knows
+// was read: then counted here, from the lines it was sent.
 function chatUnread(id){
-  const s=CH.seen[id]||0;
-  return ((CH.state&&CH.state.log)||[]).filter(m=>!m.me&&m.f===id&&m.q>s).length;
+  const f=chatFriend(id);
+  if(!f)return 0;
+  const mark=CH.readSent[id]||0;
+  if(mark<=f.read)return f.unread;
+  return ((CH.state&&CH.state.log)||[]).filter(m=>!m.me&&m.f===id&&m.q>mark).length;
 }
 function chatBadge(){
   const on=String((st&&st.menu)||"").includes("chat");
@@ -1209,6 +1221,32 @@ function chatLine(text,cls){
     for(const id of ["chconvline","chlistline"]){$(id).textContent="";}
     CH.drawn="";},5000);
 }
+function mins(s){return Math.max(0,Math.floor(s/60));}
+function clockAt(t){
+  const d=new Date(t*1000),today=new Date();
+  const hm=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+  if(d.toDateString()===today.toDateString())return hm;
+  return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()]+" "+hm;
+}
+// Where a friend is, from the last thing they said about it: the phase, when
+// it began, when it was planned to end. Counted here, so the minutes move
+// while nothing new arrives. A phase long past its planned end with no word
+// since is a Mac that slept or lost the network, not a forty-minute pomodoro,
+// and is shown as the last thing known; a break is given longer than work,
+// because a long break is a thing people take.
+function chatWhere(f){
+  const now=Date.now()/1000;
+  if(!f.ph)return {t:"No word yet",c:""};
+  if(f.ph==="off")return {t:"Not in a pomodoro",c:""};
+  const len=Math.max(0,f.until-f.since);
+  const gone=f.until+(f.ph==="work"?20*60:3*3600);
+  if(now>gone)return {t:"Last seen "+(f.ph==="work"?"working":"on a break")+", "+
+    clockAt(f.st||f.since),c:""};
+  if(f.ph==="work")return {t:"Working · "+Math.min(mins(now-f.since),mins(len))+
+    " of "+mins(len)+" min",c:"work"};
+  if(now>f.until)return {t:"On a break · "+mins(now-f.until)+" min over",c:"on"};
+  return {t:"On a break · "+mins(now-f.since)+" of "+mins(len)+" min",c:"on"};
+}
 function chatShow(sub,id){
   CH.sub=sub;
   if(id!==undefined)CH.friend=id;
@@ -1220,8 +1258,7 @@ function chatShow(sub,id){
   $("chtitle").textContent=sub==="add"?"Add a friend":"Messages";
   if(sub==="conv"){
     CH.stick=true;$("chtext").value="";
-    setTimeout(()=>{if(M.on&&M.view==="chat"&&CH.sub==="conv"&&!$("chtext").disabled)
-      $("chtext").focus();},80);
+    setTimeout(()=>{if(M.on&&M.view==="chat"&&CH.sub==="conv")$("chtext").focus();},80);
   }
   if(sub==="add"){
     addReset();
@@ -1243,9 +1280,11 @@ function paintChat(){
     CH.addBusy=0;
     addStat("No answer from the chat helper. Try again in a moment","bad");
   }
-  // Redrawn when something changed, not four times a second: a rebuilt list
-  // jumps its scroll position out from under a click.
-  const key=CH.ver+":"+CH.sub+":"+CH.friend+":"+CH.pending.length+":"+before;
+  // Redrawn when something changed, and every quarter of a minute for the
+  // minutes in "Working · 14 of 25 min" — not four times a second: a rebuilt
+  // list jumps its scroll position out from under a click.
+  const key=CH.ver+":"+CH.sub+":"+CH.friend+":"+CH.pending.length+":"+before+
+    ":"+Math.floor(now/15000);
   if(key===CH.drawn)return;
   CH.drawn=key;
   if(CH.sub==="list")drawFriends();
@@ -1265,17 +1304,19 @@ function drawFriends(){
   const empty=t=>{const e=document.createElement("div");e.className="chempty";
     e.textContent=t;box.appendChild(e);};
   if(!c){empty("Connecting…");return;}
-  const fr=(c.friends||[]).slice().sort((a,b)=>(b.on?1:0)-(a.on?1:0));
+  // On a break first, then at work, then the rest: who you could talk to now.
+  const rank=f=>{const w=chatWhere(f).c;return w==="on"?0:w==="work"?1:2;};
+  const fr=(c.friends||[]).slice().sort((a,b)=>rank(a)-rank(b)||a.n.localeCompare(b.n));
   if(!fr.length)empty("No friends yet. One of you makes a code and sends it "+
-    "to the other on Signal.");
+    "to the other.");
   for(const f of fr){
+    const w=chatWhere(f);
     const row=document.createElement("div");
-    row.className="chf"+(f.on?" on":"");
+    row.className="chf"+(w.c?" "+w.c:"");
     row.dataset.fr=f.id;
     const t=document.createElement("span");t.className="chft";
     const b=document.createElement("b");b.textContent=f.n;   // never innerHTML
-    const s=document.createElement("span");
-    s.textContent=f.on?"on a break":"not on a break";
+    const s=document.createElement("span");s.textContent=w.t;
     t.appendChild(b);t.appendChild(s);
     row.appendChild(chatAvatar(f.n));row.appendChild(t);
     const n=chatUnread(f.id);
@@ -1304,9 +1345,10 @@ function bubble(box,text,cls,meta){
 function drawConv(){
   const f=chatFriend(CH.friend);
   if(!f){chatShow("list");return;}  // removed, or the helper went away
+  const w=chatWhere(f);
   $("chtitle").textContent=f.n;
-  $("chsub").textContent=f.on?"on a break":"not on a break";
-  $("chsub").className="chsub"+(f.on?" on":"");
+  $("chsub").textContent=w.t;
+  $("chsub").className="chsub"+(w.c?" "+w.c:"");
   const box=$("chlog");
   const atEnd=box.scrollHeight-box.scrollTop-box.clientHeight<40;
   const log=((CH.state&&CH.state.log)||[]).filter(m=>m.f===f.id);
@@ -1314,27 +1356,33 @@ function drawConv(){
   box.textContent="";
   if(!log.length&&!mine.length){
     const e=document.createElement("div");e.className="chnone";
-    e.textContent=f.on
-      ? f.n+" is on a break too. Nothing said here is kept after it."
-      : f.n+" isn’t on a break. When you both are, you can write here.";
+    e.textContent="Nothing yet. Whatever you write reaches "+f.n+
+      " on the next break, or now, if this is one.";
     box.appendChild(e);
   }
+  let top=0;
   for(const m of log){
     if(m.me)bubble(box,m.x,"me"+(m.s==="sending"?" wait":m.s==="failed"?" fail":""),
                    m.s==="failed"?"Not sent":"");
-    else bubble(box,m.x,"them");
-    if(!m.me)CH.seen[f.id]=Math.max(CH.seen[f.id]||0,m.q);
+    else{bubble(box,m.x,"them");top=Math.max(top,m.q);}
   }
   for(const p of mine)bubble(box,p.x,"me wait");
+  // On screen is read. Told to the helper once per new line, not per redraw.
+  if(top>Math.max(f.read,CH.readSent[f.id]||0)){
+    CH.readSent[f.id]=top;
+    mpost("chat.read."+f.id+"."+top);
+  }
   const t=$("chtext");
-  t.disabled=!f.on;
-  t.placeholder=f.on?"Message "+f.n:f.n+" isn’t on a break";
-  $("chsend").disabled=!f.on||!t.value.trim();
+  t.placeholder="Message "+f.n;
+  $("chsend").disabled=!t.value.trim();
+  $("chhint").textContent=w.c==="on"?"":w.c==="work"
+    ? f.n+" is working. This will be waiting at the next break."
+    : "Messages wait on the relay for up to twelve hours.";
   if(atEnd||CH.stick){box.scrollTop=box.scrollHeight;CH.stick=false;}
 }
 function chatSend(){
   const f=chatFriend(CH.friend),t=$("chtext").value.trim();
-  if(!f||!f.on||!t)return;
+  if(!f||!t)return;
   const q0=((CH.state&&CH.state.log)||[]).reduce((a,m)=>Math.max(a,m.q),0);
   CH.pending.push({f:f.id,x:t,q0,at:Date.now()});
   mpost("chat.send."+f.id+"."+t);
@@ -1346,18 +1394,19 @@ function chatNote(n){
     CH.addBusy=0;
     if(CH.sub!=="add")return;
     $("chform").hidden=true;
-    addStat(n.n+"’s code is on your clipboard. Paste it to "+n.n+
-      " on Signal. The code is the whole friendship, so send it nowhere else.","ok",
+    addStat(n.n+"’s code is on your clipboard. Send it to "+n.n+
+      " privately: whoever has it can read what you two write.","ok",
       [["Copy again",()=>mpost("chat.copy."+n.id)],["Done",()=>chatShow("list")]]);
   }else if(n.k==="joined"){
     CH.addBusy=0;
     chatShow("list");
-    chatLine(n.n+" added. You will see them here when you are both on a break.","ok");
+    chatLine(n.n+" added. Write whenever you like: it arrives at "+n.n+
+      "’s next break.","ok");
   }else if(n.k==="bad"){
     CH.addBusy=0;
     addStat(n.x,"bad");
   }else if(n.k==="copied"){
-    if(CH.sub==="conv")chatLine("Code copied. Send it on Signal, and nowhere else.","ok");
+    if(CH.sub==="conv")chatLine("Code copied. Send it only to "+n.n+".","ok");
   }else if(n.k==="forgot"){
     if(CH.sub!=="list")chatShow("list");
     chatLine(n.x+" removed.","");
@@ -1460,8 +1509,7 @@ $("vol").addEventListener("input",()=>{
 });
 $("ntext").addEventListener("input",()=>{noteSync();noteDraftSave();});
 $("chtext").addEventListener("input",()=>{
-  const f=chatFriend(CH.friend);
-  $("chsend").disabled=!f||!f.on||!$("chtext").value.trim();
+  $("chsend").disabled=!$("chtext").value.trim();
 });
 $("chsend").addEventListener("click",chatSend);
 $("chmake").addEventListener("click",chatInvite);
@@ -1472,7 +1520,8 @@ $("chjoin").addEventListener("click",chatJoin);
 $("chcopy").addEventListener("click",()=>mpost("chat.copy."+CH.friend));
 $("chforget").addEventListener("click",()=>{
   // Twice, because it cannot be taken back from here: the code is gone from
-  // this Mac, and only a new one, sent on Signal again, makes a friend again.
+  // this Mac, and so is what you said, and only a new code makes a friend
+  // again.
   const f=chatFriend(CH.friend);
   if(!f)return;
   if(CH.armed){CH.armed=0;mpost("chat.forget."+f.id);return;}
@@ -1977,7 +2026,9 @@ ticker=setInterval(paint,250);
   // one of them on a break and mid-conversation.
   if(m[1].startsWith("chat")){
     const chat={run:"demo",relay:{ok:true,x:""},note:null,
-      friends:[{id:"e5f6a7b8",n:"Ola",on:false},{id:"a1b2c3d4",n:"Kari",on:true}],
+      friends:[{id:"e5f6a7b8",n:"Ola",ph:"work",since:now-14*60,until:now+11*60,st:now-14*60,read:0,unread:0},
+               {id:"a1b2c3d4",n:"Kari",ph:"break",since:now-3*60,until:now+2*60,st:now-3*60,read:0,unread:2},
+               {id:"c9d8e7f6",n:"Per",ph:"off",since:now-3600,until:0,st:now-3600,read:0,unread:0}],
       log:[{q:1,f:"a1b2c3d4",me:false,x:"Pause nå? 🍅",t:now-90,s:""},
            {q:2,f:"a1b2c3d4",me:true,x:"Ja! Fem minutter, så tilbake til TDT4100",t:now-80,s:"sent"},
            {q:3,f:"a1b2c3d4",me:false,x:"Samme her. Hvordan går øvingen?",t:now-30,s:""}]};

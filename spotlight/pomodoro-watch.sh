@@ -19,8 +19,8 @@
 # bare scripts for the reason pause-media.sh already documents at length:
 # permissions are granted to a name, and the name has to be stable. The third,
 # "TimeTracker Chat", is started here too, but for the whole break rather than
-# on request: your friends can only see you on a break while something is
-# there to be seen.
+# on request: it is what collects the messages that waited for you. At every
+# change of phase this also has it post, and only post, where you now are.
 #
 # Short sleeps + wall-clock comparison, never one long sleep: macOS suspends
 # sleeping processes across system sleep, and wall-clock math means a closed
@@ -100,6 +100,9 @@ hushed=0
 silent=0
 last_audio=0
 last_menu=0
+# When the phase now under way began: what a friend is told it has been
+# running since. The pomodoro file keeps only where the phase will end.
+phase_at=$seg
 
 write_pomo() {
     local tmp; tmp="$(mktemp "$DATA_DIR/.pomodoro.XXXXXX")"
@@ -380,9 +383,21 @@ chat_agent() {
     printf '%s\n' "$!" > "$CHAT_PID"
 }
 
-# SIGTERM, which the helper answers by saying goodbye to whoever is there and
-# then leaving. Cheap when there is nothing to stop, which is every tick of
-# every work block.
+# Where you are in your cycle, told to each friend: once per change of phase,
+# in the background, by a helper that posts and exits. It is the one thing
+# Messages does outside a break, and all it says is the phase, when it began,
+# and when it is planned to end — sealed, like everything else, and kept by
+# the relay for twelve hours so that a friend whose break starts later still
+# learns it. Nothing at all without Messages on and a friend to tell.
+chat_status() {
+    [[ "$(tt_setting chat)" == "on" && -x "$CHAT_BIN" && -s "$DATA_DIR/friends.tsv" ]] \
+        || return 0
+    ( "$CHAT_BIN" status "$DATA_DIR" "$1" "$2" "$3" >/dev/null 2>&1 & )
+}
+
+# SIGTERM, which the helper answers by writing down what it has and leaving.
+# Cheap when there is nothing to stop, which is every tick of every work
+# block.
 chat_stop() {
     local pid
     [[ -f "$CHAT_PID" ]] || return 0
@@ -423,6 +438,8 @@ do_accept() {
     nudged=0
     overran=0
     write_pomo
+    phase_at=$at
+    chat_status break "$at" "$target"
 }
 
 do_snooze() {
@@ -434,6 +451,7 @@ do_snooze() {
     target=$(( base + $(tt_setting_secs snooze_minutes) ))
     resume_music
     write_pomo
+    chat_status work "$phase_at" "$target"
 }
 
 do_skip() {
@@ -443,6 +461,8 @@ do_skip() {
     target=$(( at + $(tt_setting_secs pomodoro_minutes) ))
     resume_music
     write_pomo
+    phase_at=$at
+    chat_status work "$at" "$target"
 }
 
 do_back_to_work() {
@@ -455,12 +475,15 @@ do_back_to_work() {
     nudged=0
     resume_music
     write_pomo
+    phase_at=$at
+    chat_status work "$at" "$target"
 }
 
 # --- arm ---------------------------------------------------------------------
 
 write_pomo
 rm -f "$CHOICE_FILE"
+chat_status work "$seg" "$target"
 
 # --- the loop ----------------------------------------------------------------
 
@@ -471,7 +494,7 @@ while :; do
 
     # The file is the cycle. Gone = consumed by action.sh at close, or a new
     # cycle replaced it; either way this watcher is done.
-    [[ -f "$POMO_FILE" ]] || exit 0
+    [[ -f "$POMO_FILE" ]] || { chat_status off "$now" 0; exit 0; }
     p_phase=""; p_key=""; p_seg=""; p_target=""; p_count=""; p_over=""; p_pid=""
     IFS=$'\t' read -r p_phase p_key p_seg p_target p_count p_over p_pid \
         < "$POMO_FILE" 2>/dev/null || true
@@ -492,6 +515,7 @@ while :; do
         rm -f "$POMO_FILE" "$CHOICE_FILE"
         menu_end          # the agent notices the missing pomodoro file and exits
         kill_overlay      # also clears the heartbeat and the hint flag
+        chat_status off "$now" 0
         exit 0
     fi
 
@@ -585,6 +609,7 @@ while :; do
         : > "$STOP_FILE"
         menu_end
         rm -f "$POMO_FILE" "$CHOICE_FILE" "$AUDIO_FILE"
+        chat_status off "$now" 0
         exit 0
     fi
 

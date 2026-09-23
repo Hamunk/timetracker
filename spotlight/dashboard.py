@@ -893,12 +893,12 @@ is created when the first note is saved.</div>
 </div></section>
 
 <section id="s-chat"><h2>Messages</h2>
-<div class="lead">Write to friends who are on a break at the same moment you are.
-Friends are added from the break menu: one of you makes a code and sends it to the
-other on Signal. While you are on a break, TimeTracker connects to the relay
-(<code>ntfy.sh</code>) once for each friend. Messages are encrypted before they leave
-this Mac, the relay stores none of them, and none is kept after the break. The relay
-does see your IP address and when you are on a break. Off by default.</div>
+<div class="lead">Write to your friends, and see where each of them is in their
+pomodoro. Friends are added from the break menu: one of you makes a code and sends it
+to the other, privately. A message waits on the relay (<code>ntfy.sh</code>) for up to
+twelve hours and is read at the next break; it is encrypted before it leaves this Mac,
+and the relay cannot read it. Your friends see when you start and end work and
+breaks, and so does the relay, along with your IP address. Off by default.</div>
 <div class="panel" data-sec="chat"><div class="empty">Loading&hellip;</div></div></section>
 
 <section id="s-calendar"><h2>Calendar</h2>
@@ -967,7 +967,7 @@ const META={
    "Pause music you started when the break passes its end"],
  reminders:["Reminders panel","Show Add Reminder in the break menu"],
  chat:["Messages panel",
-   "Show Messages in the break menu, and connect to the relay during breaks"],
+   "Show Messages in the break menu, and tell your friends where you are in your pomodoro"],
  paint_calendar:["Write sessions to the calendar",""],
  paint_days:["Days to keep in sync","How far back each update reaches"],
  paint_min_minutes:["Shortest session to write",
@@ -1561,11 +1561,12 @@ you marked one, and otherwise the music is paused. If the break runs over while 
 started is playing, the music is paused.</td></tr>
 <tr><td><b>Add Reminder</b></td><td>A note that is saved to a list of its own in Apple
 Reminders. <kbd>&#8984;</kbd><kbd>&crarr;</kbd> saves it. A draft survives the break.</td></tr>
-<tr><td><b>Messages</b></td><td>Friends who are on a break at the same moment, and what
+<tr><td><b>Messages</b></td><td>Your friends, where each is in their pomodoro, and what
 you say to each other. To add one, one of you chooses <i>Make a code</i>, which puts a code
-on the clipboard, and sends it to the other on Signal; the other chooses <i>I have a
-code</i> and pastes it. Messages reach only a friend who is on a break, and are gone when
-the break ends. Off until you turn it on in Settings.</td></tr>
+on the clipboard, and sends it to the other privately; the other chooses <i>I have a
+code</i> and pastes it. Write whenever you like: a message waits, for up to twelve hours,
+and arrives at your friend's next break, as theirs arrive at yours. Nothing interrupts a
+work session. Off until you turn it on in Settings.</td></tr>
 </table></div>
 <p>Inside the menu, <kbd>s</kbd> opens Spotify, <kbd>n</kbd> the note and <kbd>m</kbd>
 Messages; <kbd>Esc</kbd> goes back and a click outside closes it. All four keys can be
@@ -1581,8 +1582,8 @@ only on this computer, and closes itself after ten idle minutes.</p></section>
 <section id="g-data"><h2>Your data</h2>
 <p>Everything is in <code>~/.timetrack</code>, readable only by your user, and every
 file is plain text. Nothing is sent anywhere, with one exception you choose: with
-Messages on, what you write to a friend during a break goes to them, encrypted, through
-the relay. Your log never does.</p>
+Messages on, what you write to a friend, and where you are in your pomodoro, goes to your
+friends, encrypted, through the relay. Your log never does.</p>
 <div class="panel"><table>
 <tr><td><code>sessions.tsv</code></td><td>The log: start, end, duration, category, plan, recap, pomodoros, overrun.</td></tr>
 <tr><td><code>categories.tsv</code></td><td>Key, name, keywords, last used, hidden.</td></tr>
@@ -1590,6 +1591,7 @@ the relay. Your log never does.</p>
 <tr><td><code>spotify-playlists.tsv</code></td><td>Break playlists, and which one is for work.</td></tr>
 <tr><td><code>paint-calendar</code>, <code>reminders-list</code></td><td>The calendar and the Reminders list the two tools write to.</td></tr>
 <tr><td><code>friends.tsv</code></td><td>Your friends and their codes. A code is the whole friendship: anyone who has it can read what you write to that friend.</td></tr>
+<tr><td><code>chat-log.tsv</code>, <code>chat-sync.tsv</code></td><td>What you and your friends have said, the last few hundred lines each, and where each friend was when you last heard.</td></tr>
 <tr><td><code>chat-relay</code></td><td>The relay Messages uses, if not <code>ntfy.sh</code>: one <code>https://</code> URL.</td></tr>
 </table></div>
 <p>The calendar tool rewrites the last fourteen days of the chosen calendar to match the log

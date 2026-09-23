@@ -88,16 +88,21 @@ them can start a cycle, end a break, or write to the log.
 
 ## Messages
 
-Friends who are on a break at the same moment can write to each other from
-the break menu, and at no other time. To add a friend, one of you chooses
-*Make a code* and sends the code on Signal; the other chooses *I have a code*
-and pastes it. The code is the whole friendship. There is no account.
+Write to your friends from the break menu, and see where each of them is in
+their pomodoro: *Working · 14 of 25 min*, *On a break · 3 of 5 min*. To add a
+friend, one of you chooses *Make a code* and sends the code to the other
+privately; the other chooses *I have a code* and pastes it. The code is the
+whole friendship. There is no account.
+
+Write whenever you like. A message waits and arrives at your friend's next
+break, as theirs to you arrive at yours; nothing interrupts a work session.
 
 Messages travel through [ntfy.sh](https://ntfy.sh), a public relay, sealed
-before they leave your Mac. The relay stores none of them and cannot read
-them, and nothing is kept after the break. It does see your IP address and
-when you are on a break. Off by default; with it off, nothing here talks to
-the internet.
+before they leave your Mac. The relay cannot read them and forgets them after
+twelve hours, so a message to someone who takes no break in that time is lost.
+It does see your IP address and when you start and end work and breaks, and
+so do your friends. Off by default; with it off, nothing here talks to the
+internet.
 
 ## Settings
 
@@ -127,12 +132,14 @@ is text.
 | `reminders-list` | the list break notes go to |
 | `spotify-playlists.tsv` | break playlists, and the one kept for work |
 | `friends.tsv` | your friends and their codes; the one secret here |
+| `chat-log.tsv` | what you and your friends have said, the last few hundred lines each |
+| `chat-sync.tsv` | what you have read, and where each friend was when you last heard |
 | `chat-relay` | the relay Messages uses, if not ntfy.sh |
 
 Every write goes through `action.sh`, which takes a lock and validates. The
-dashboard has no other path to the log. `friends.tsv` is the exception, and
-has one writer of its own: the chat helper, the only program that reads a
-code.
+dashboard has no other path to the log. The `chat-` files and `friends.tsv`
+are the exception, and have one writer of their own: the chat helper, the
+only program that reads a code.
 
 ## Calendar
 
@@ -159,8 +166,9 @@ the bundles it generates.
 
 `categories.tsv` is data you may edit, and it never runs as code. The
 dashboard listens only on this computer, only while open, with a per-run
-token. Messages, when on, is the one part that talks to the internet: only
-during a break, only by connecting out, and only in sealed messages.
+token. Messages, when on, is the one part that talks to the internet: only by
+connecting out, and only in sealed messages — during a break, and for a moment
+at each change of phase to say where you now are.
 `SECURITY.md` has the full review.
 
 The log is a record of your hours. It is kept locally and sent nowhere.

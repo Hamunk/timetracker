@@ -260,6 +260,12 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
             guard code.hasPrefix("tt1-"), code.count <= 80, !n.isEmpty,
                   code.dropFirst(4).allSatisfy({ b64url.contains($0) }) else { return }
             chatQueue("join\t\(n)\t\(code)")
+        } else if a.hasPrefix("read.") {
+            // read.<id>.<q>: everything from them up to q has been on screen.
+            let r = a.dropFirst(5)
+            guard let dot = r.firstIndex(of: "."), let f = friend(r[..<dot]),
+                  let n = Int(r[r.index(after: dot)...]), n >= 0 else { return }
+            chatQueue("read\t\(f)\t\(n)")
         } else if a.hasPrefix("copy."), let f = friend(a.dropFirst(5)) {
             chatQueue("copy\t\(f)")
         } else if a.hasPrefix("forget."), let f = friend(a.dropFirst(7)) {
@@ -318,14 +324,21 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
         var out: [String: Any] = ["run": text(o["run"], 16)]
         let r = (o["relay"] as? [String: Any]) ?? [:]
         out["relay"] = ["ok": (r["ok"] as? Bool) ?? false, "x": text(r["x"], 200)] as [String: Any]
+        func count(_ v: Any?) -> Int { return max(0, (v as? Int) ?? 0) }
         var friends: [[String: Any]] = []
         for f in ((o["friends"] as? [[String: Any]]) ?? []).prefix(20) {
             guard let id = hex8(f["id"]) else { continue }
-            friends.append(["id": id, "n": text(f["n"], 40), "on": (f["on"] as? Bool) ?? false])
+            let ph = (f["ph"] as? String) ?? ""
+            friends.append(["id": id, "n": text(f["n"], 40),
+                            "ph": ["work", "break", "off"].contains(ph) ? ph : "",
+                            "since": count(f["since"]), "until": count(f["until"]),
+                            "st": count(f["st"]), "read": count(f["read"]),
+                            "unread": count(f["unread"])])
         }
         out["friends"] = friends
         var log: [[String: Any]] = []
-        for m in ((o["log"] as? [[String: Any]]) ?? []).suffix(200) {
+        // Sixty lines a friend, twenty friends: the most the helper sends.
+        for m in ((o["log"] as? [[String: Any]]) ?? []).suffix(1200) {
             guard let q = m["q"] as? Int, let f = hex8(m["f"]) else { continue }
             let st = (m["s"] as? String) ?? ""
             log.append(["q": q, "f": f, "me": (m["me"] as? Bool) ?? false,

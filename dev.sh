@@ -122,9 +122,10 @@ cmd_relay() {
 }
 
 # The other end of a friendship, for whoever has no second Mac and no friend
-# on a break: make a code on the scratch break screen, paste it here, and this
+# to hand: make a code on the scratch break screen, paste it here, and this
 # terminal is that friend — on a break, answering, until you close it. Each
-# line you type is sent; what arrives is printed. It uses the scratch
+# line you type is sent, except /work [min], /break [min] and /off, which say
+# where this friend now is; what arrives is printed. It uses the scratch
 # install's own helper and the stand-in relay, never ntfy.sh.
 cmd_friend() {
     local bin="$TIMETRACK_APPS_DIR/TimeTracker Chat.app/Contents/MacOS/ttchat"
