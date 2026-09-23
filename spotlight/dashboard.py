@@ -892,6 +892,15 @@ is created when the first note is saved.</div>
   <button class="btn" id="rl-save">Save list</button>
 </div></section>
 
+<section id="s-chat"><h2>Messages</h2>
+<div class="lead">Write to friends who are on a break at the same moment you are.
+Friends are added from the break menu: one of you makes a code and sends it to the
+other on Signal. While you are on a break, TimeTracker connects to the relay
+(<code>ntfy.sh</code>) once for each friend. Messages are encrypted before they leave
+this Mac, the relay stores none of them, and none is kept after the break. The relay
+does see your IP address and when you are on a break. Off by default.</div>
+<div class="panel" data-sec="chat"><div class="empty">Loading&hellip;</div></div></section>
+
 <section id="s-calendar"><h2>Calendar</h2>
 <div class="lead">Every logged session can be written to a calendar. Use an
 empty calendar of its own: everything in it from the last
@@ -928,9 +937,10 @@ $("nav-guide").href="/guide?t="+encodeURIComponent(TOKEN);
 const SEC={
  timer:["pomodoro_minutes","break_minutes","long_break_minutes","long_break_every",
    "snooze_minutes","auto_accept_seconds","pomodoro_default"],
- screen:["sound","pause_media","key_menu","key_spotify","key_reminder"],
+ screen:["sound","pause_media","key_menu","key_spotify","key_reminder","key_chat"],
  spotify:["spotify","spotify_resume_work","spotify_pause_on_overrun"],
  reminders:["reminders"],
+ chat:["chat"],
  calendar:["paint_calendar","paint_days","paint_min_minutes"],
  tomato:["easter_egg"]};
 const META={
@@ -948,6 +958,7 @@ const META={
  key_menu:["Menu key","Opens and closes the break menu"],
  key_spotify:["Spotify key","Opens the Spotify panel from the menu"],
  key_reminder:["Reminder key","Opens the note panel from the menu"],
+ key_chat:["Messages key","Opens Messages from the menu"],
  easter_egg:["Playable tomato","Let the tomato on the break screen open the game"],
  spotify:["Spotify panel","Show Spotify in the break menu"],
  spotify_resume_work:["Work playlist after a break",
@@ -955,12 +966,15 @@ const META={
  spotify_pause_on_overrun:["Pause when the break runs over",
    "Pause music you started when the break passes its end"],
  reminders:["Reminders panel","Show Add Reminder in the break menu"],
+ chat:["Messages panel",
+   "Show Messages in the break menu, and connect to the relay during breaks"],
  paint_calendar:["Write sessions to the calendar",""],
  paint_days:["Days to keep in sync","How far back each update reaches"],
  paint_min_minutes:["Shortest session to write",
    "Shorter sessions are left off the calendar"]};
 const TOC=[["s-timer","Timer"],["s-screen","Break screen"],["s-spotify","Spotify"],
- ["s-reminders","Reminders"],["s-calendar","Calendar"],["s-categories","Categories"],
+ ["s-reminders","Reminders"],["s-chat","Messages"],["s-calendar","Calendar"],
+ ["s-categories","Categories"],
  ["s-tomato","Tomato game"]];
 let CUR={},CATS=[],SEEN="",BUSY=false,SAVING=false,msgTimer=null,statTimer=null;
 function esc(t){const d=document.createElement("div");d.textContent=t==null?"":t;return d.innerHTML;}
@@ -1538,7 +1552,7 @@ inside an embedded player may not be reachable; the screen says so and
 
 <section id="g-break"><h2>Break screen</h2>
 <p>A menu sits behind the button in the top left, or behind <kbd>Tab</kbd>. It holds
-two tools, each of which appears only when it is on in Settings and its permission has
+three tools, each of which appears only when it is on in Settings and its permission has
 been granted.</p>
 <div class="panel"><table>
 <tr><td><b>Spotify</b></td><td>Your break playlists, transport buttons, and volume. Choosing a
@@ -1547,9 +1561,15 @@ you marked one, and otherwise the music is paused. If the break runs over while 
 started is playing, the music is paused.</td></tr>
 <tr><td><b>Add Reminder</b></td><td>A note that is saved to a list of its own in Apple
 Reminders. <kbd>&#8984;</kbd><kbd>&crarr;</kbd> saves it. A draft survives the break.</td></tr>
+<tr><td><b>Messages</b></td><td>Friends who are on a break at the same moment, and what
+you say to each other. To add one, one of you chooses <i>Make a code</i>, which puts a code
+on the clipboard, and sends it to the other on Signal; the other chooses <i>I have a
+code</i> and pastes it. Messages reach only a friend who is on a break, and are gone when
+the break ends. Off until you turn it on in Settings.</td></tr>
 </table></div>
-<p>Inside the menu, <kbd>s</kbd> opens Spotify and <kbd>n</kbd> the note; <kbd>Esc</kbd>
-goes back and a click outside closes it. All three keys can be changed in Settings.</p></section>
+<p>Inside the menu, <kbd>s</kbd> opens Spotify, <kbd>n</kbd> the note and <kbd>m</kbd>
+Messages; <kbd>Esc</kbd> goes back and a click outside closes it. All four keys can be
+changed in Settings.</p></section>
 
 <section id="g-dashboard"><h2>Dashboard</h2>
 <p>Totals for today, this week and all time, a table per category, and the recent
@@ -1560,13 +1580,17 @@ only on this computer, and closes itself after ten idle minutes.</p></section>
 
 <section id="g-data"><h2>Your data</h2>
 <p>Everything is in <code>~/.timetrack</code>, readable only by your user, and every
-file is plain text. Nothing is sent anywhere.</p>
+file is plain text. Nothing is sent anywhere, with one exception you choose: with
+Messages on, what you write to a friend during a break goes to them, encrypted, through
+the relay. Your log never does.</p>
 <div class="panel"><table>
 <tr><td><code>sessions.tsv</code></td><td>The log: start, end, duration, category, plan, recap, pomodoros, overrun.</td></tr>
 <tr><td><code>categories.tsv</code></td><td>Key, name, keywords, last used, hidden.</td></tr>
 <tr><td><code>settings.tsv</code></td><td>Only the settings you changed from the defaults.</td></tr>
 <tr><td><code>spotify-playlists.tsv</code></td><td>Break playlists, and which one is for work.</td></tr>
 <tr><td><code>paint-calendar</code>, <code>reminders-list</code></td><td>The calendar and the Reminders list the two tools write to.</td></tr>
+<tr><td><code>friends.tsv</code></td><td>Your friends and their codes. A code is the whole friendship: anyone who has it can read what you write to that friend.</td></tr>
+<tr><td><code>chat-relay</code></td><td>The relay Messages uses, if not <code>ntfy.sh</code>: one <code>https://</code> URL.</td></tr>
 </table></div>
 <p>The calendar tool rewrites the last fourteen days of the chosen calendar to match the log
 whenever a session changes, so give it an empty calendar of its own.</p></section>

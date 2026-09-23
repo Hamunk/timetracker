@@ -110,6 +110,19 @@ CASES = [
     (BLOCK, "Bash", "cp /tmp/x ~/.timetrack/categories.tsv", "copy into the real data"),
     (BLOCK, "Bash", "mkdir -p ~/.timetrack/bin", "mkdir inside the real install"),
 
+    # --- the break chat: the real one says goodbye to real friends when it is
+    # ended, and writes friends.tsv when it is run, so both are guarded like
+    # the overlay. Its tests and its stand-ins go through python and dev.sh.
+    (BLOCK, "Bash", 'pkill -f "ttchat break"', "unscoped pkill of the chat"),
+    (BLOCK, "Bash", "killall ttchat", "killall the chat by name"),
+    (BLOCK, "Bash", "/tmp/build/ttchat break ~/.timetrack", "a chat run against the real data"),
+    (BLOCK, "Write", HOME + "/.timetrack/friends.tsv", "Write the real friends"),
+    (ALLOW, "Bash", "python3 spotlight/chat.test.py", "the chat tests"),
+    (ALLOW, "Bash", "TTCHAT_BIN=/tmp/ttchat python3 spotlight/chat.test.py",
+     "the chat tests, prebuilt"),
+    (ALLOW, "Bash", "./dev.sh relay", "the stand-in relay"),
+    (ALLOW, "Bash", "./dev.sh friend tt1-abc", "a scratch friend in a terminal"),
+
     # --- nothing to do with any of this
     (ALLOW, "Bash", "echo hi > /tmp/scratch", "unrelated write"),
     (ALLOW, "Bash", "git status", "unrelated command"),

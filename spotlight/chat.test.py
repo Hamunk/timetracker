@@ -296,12 +296,179 @@ def local():
               texts <= 20 and rated >= 5 and texts + rated == 25)
         b.close()
         b.p.wait(timeout=5)
+
+        break_mode(relay, peers)
     finally:
         for p in peers:
             p.kill()
         if tap:
             tap.kill()
         relay_p.kill()
+
+
+# --- break mode ---------------------------------------------------------------
+# The helper as the watcher runs it: a data directory with a cycle in it, a
+# command file the overlay would write, a state file the overlay would read.
+# The friend is a headless peer holding the code the room made.
+
+def pomo(d, phase, watcher="424242"):
+    now = int(time.time())
+    with open(os.path.join(d, "pomodoro"), "w") as f:
+        f.write("%s\tKEY\t%d\t%d\t1\t0\t%s\n" % (phase, now - 60, now + 300, watcher))
+
+
+def command(d, line):
+    """Written the way the overlay writes it — whole, by rename — and only
+    once the last one has been taken, the way its outbox waits."""
+    path = os.path.join(d, ".tomato-chat-cmd")
+    deadline = time.time() + 5
+    while os.path.exists(path) and time.time() < deadline:
+        time.sleep(0.05)
+    with open(path + ".t", "w") as f:
+        f.write(line + "\n")
+    os.rename(path + ".t", path)
+
+
+def state(d, want=lambda s: True, timeout=8):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(os.path.join(d, ".tomato-chat")) as f:
+                s = json.load(f)
+            if want(s):
+                return s
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.1)
+    return None
+
+
+def room(d):
+    return subprocess.Popen([BIN, "break", d], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            env=dict(os.environ, TTCHAT_CLIPBOARD="off"))
+
+
+def friends_file(d):
+    with open(os.path.join(d, "friends.tsv")) as f:
+        return [l.rstrip("\n").split("\t") for l in f][1:]
+
+
+def break_mode(relay, peers):
+    d = tempfile.mkdtemp(prefix="ttchat-room.")
+    with open(os.path.join(d, "chat-relay"), "w") as f:
+        f.write(relay + "\n")
+
+    print("break mode: when it runs")
+    pomo(d, "WORK")
+    p = room(d)
+    check("started outside a break, it exits at once and writes nothing",
+          p.wait(timeout=5) == 0 and not os.path.exists(os.path.join(d, ".tomato-chat")))
+
+    pomo(d, "BREAK")
+    r = room(d)
+    s = state(d)
+    check("on a break it comes up: no friends yet, relay fine",
+          s is not None and s["friends"] == [] and s["relay"]["ok"])
+    second = room(d)
+    check("a second one in the same directory exits, leaving the first",
+          second.wait(timeout=5) == 0 and r.poll() is None)
+
+    print("break mode: pairing")
+    command(d, "invite\tKari")
+    s = state(d, lambda s: s["note"] and s["note"]["k"] == "invited")
+    kari = s["note"]["id"] if s else "?"
+    check("making a code adds the friend, by a non-secret id",
+          s is not None and [f["n"] for f in s["friends"]] == ["Kari"]
+          and re.match(r"^[0-9a-f]{8}$", kari))
+    rows = friends_file(d)
+    check("friends.tsv holds the code, and only its owner can read it",
+          len(rows) == 1 and CODE.match(rows[0][2])
+          and os.stat(os.path.join(d, "friends.tsv")).st_mode & 0o077 == 0)
+    check("the state file the overlay reads carries no code",
+          "tt1-" not in open(os.path.join(d, ".tomato-chat")).read())
+
+    friend = Peer(relay, rows[0][2])
+    peers.append(friend)
+    check("Kari, holding that code, subscribes", friend.next(kind("open")) is not None)
+    check("Kari sees you (your answer to Kari's hello)", friend.next(kind("here")) is not None)
+    s = state(d, lambda s: s["friends"] and s["friends"][0]["on"])
+    check("you see Kari on a break", s is not None)
+
+    command(d, "send\t%s\thei Kari, pause nå?" % kari)
+    ev = friend.next(kind("text"))
+    check("a message to Kari arrives", ev is not None and ev[2] == "hei Kari, pause nå?")
+    s = state(d, lambda s: any(m["me"] and m.get("s") == "sent" for m in s["log"]))
+    check("and is marked sent in your log", s is not None)
+    friend.say("ja, fem min")
+    s = state(d, lambda s: any(not m["me"] and m["x"] == "ja, fem min" for m in s["log"]))
+    check("Kari's answer lands in your log, against Kari's id",
+          s is not None and all(m["f"] == kari for m in s["log"]))
+
+    other = new_code()
+    command(d, "join\tOla\t%s" % other)
+    s = state(d, lambda s: s["note"]["k"] == "joined")
+    ola = s["note"]["id"] if s else "?"
+    check("pasting a friend's code adds them",
+          s is not None and [f["n"] for f in s["friends"]] == ["Kari", "Ola"])
+    command(d, "join\tOla again\t%s" % other)
+    s = state(d, lambda s: s["note"]["k"] == "bad")
+    check("the same code twice is refused, by name",
+          s is not None and "Ola" in s["note"]["x"] and len(s["friends"]) == 2)
+    command(d, "join\tHalf\t%s" % other[:30])
+    s = state(d, lambda s: s["note"]["k"] == "bad" and "whole" in s["note"]["x"])
+    check("half a code is refused", s is not None and len(s["friends"]) == 2)
+    command(d, "send\t%s\tanyone?" % ola)
+    s = state(d, lambda s: s["note"]["k"] == "error")
+    check("a message to a friend who is not on a break is refused, and says why",
+          s is not None and "Ola" in s["note"]["x"]
+          and not any(m["x"] == "anyone?" for m in s["log"]))
+
+    for junk in ("send\tnot-an-id\thei", "run\topen -a Calculator", "copy\t../../x",
+                 "forget\tKari", "\t\t\t"):
+        command(d, junk)
+    time.sleep(0.6)
+    s = state(d)
+    check("commands it does not know, or ids that are not ids, change nothing",
+          r.poll() is None and s is not None and len(s["friends"]) == 2)
+
+    command(d, "forget\t%s" % ola)
+    s = state(d, lambda s: s["note"]["k"] == "forgot")
+    check("removing a friend removes their row",
+          s is not None and [f["n"] for f in s["friends"]] == ["Kari"]
+          and len(friends_file(d)) == 1)
+
+    print("break mode: the end of the break")
+    pomo(d, "WORK")
+    check("back to work: Kari sees you go", friend.next(kind("gone")) is not None)
+    check("it exits, and the break's messages go with it",
+          r.wait(timeout=6) == 0 and not os.path.exists(os.path.join(d, ".tomato-chat")))
+    check("the friendship does not", len(friends_file(d)) == 1)
+
+    pomo(d, "BREAK")
+    r = room(d)
+    check("next break: Kari is still a friend, and nothing old is in the log",
+          state(d, lambda s: s["friends"] and s["log"] == []) is not None)
+    pomo(d, "BREAK", watcher="535353")
+    check("a new cycle's watcher ends this one's chat", r.wait(timeout=6) == 0)
+
+    # How the watcher ends it when it has not noticed by itself: SIGTERM. The
+    # last two breaks' comings and goings are drained first, so the goodbye
+    # below can only be this one's.
+    friend.next(lambda e: False, 1.5)
+    pomo(d, "BREAK")
+    r = room(d)
+    came = friend.next(kind("here"), 10)
+    # ...and Kari's answer has reached it: a goodbye is only said to someone
+    # it knows is there.
+    state(d, lambda s: s["friends"] and s["friends"][0]["on"])
+    r.send_signal(15)
+    went = friend.next(kind("gone"), 8)
+    check("SIGTERM, with Kari there: Kari sees you go",
+          came is not None and went == ["gone", came[1]])
+    check("and it exits, taking the break's messages",
+          r.wait(timeout=6) == 0 and not os.path.exists(os.path.join(d, ".tomato-chat")))
+    friend.close()
 
 
 def live():
@@ -316,7 +483,7 @@ def live():
     b.close()
     for p in (a, b):
         p.p.wait(timeout=10)
-    errors = [e for p in (a, b) for e in p.log if e[0] == "error"]
+    errors = [e for p in (a, b) for e in p.log if e[0] in ("error", "down")]
     check("no errors from the relay", not errors)
     for e in errors:
         print("          %s" % "\t".join(e))

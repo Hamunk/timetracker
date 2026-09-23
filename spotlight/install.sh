@@ -147,6 +147,25 @@ if command -v swiftc >/dev/null 2>&1; then
         STAGE_APP="$STAGE/TimeTracker Prompt.app"
         swiftc -O "$SRC_DIR/ttprompt.swift" -o "$STAGE_APP/Contents/MacOS/ttprompt"
         cp "$SRC_DIR/tomato.html" "$STAGE_APP/Contents/Resources/tomato.html"
+        # The page shows text written on other people's machines, so the copy
+        # installed here allows exactly one script: its own, by hash. With
+        # 'unsafe-inline', as the source has so it can be opened in a browser
+        # for the #demo views, an injected onerror="" would run; with the hash
+        # it cannot. If the hash cannot be taken the page keeps 'unsafe-inline'
+        # and says so, rather than being installed with its script blocked — a
+        # break screen whose script does not run is one that cannot be ended.
+        /usr/bin/python3 - "$STAGE_APP/Contents/Resources/tomato.html" <<'PY' || \
+            printf 'warning: the break screen keeps script-src unsafe-inline\n'
+import base64, hashlib, re, sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+blocks = re.findall(r"<script>(.*?)</script>", s, re.S)
+if len(blocks) != 1 or s.count("script-src 'unsafe-inline'") != 1:
+    sys.exit(1)
+h = base64.b64encode(hashlib.sha256(blocks[0].encode("utf-8")).digest()).decode()
+open(p, "w", encoding="utf-8").write(
+    s.replace("script-src 'unsafe-inline'", "script-src 'sha256-%s'" % h))
+PY
         cat > "$STAGE_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -245,6 +264,58 @@ EOF
         rm -rf "$REM_APP"
         mv "$RSTAGE_APP" "$APPS_DIR/"
         rm -rf "$RSTAGE"
+    fi
+    # --- break chat helper ---------------------------------------------------
+    # The break menu's Messages, and the one program here that talks to the
+    # internet. It needs no permission from macOS — it only ever connects out —
+    # so it could be a bare binary; it is a bundle so that it has a name and
+    # an identity of its own, which is what an outbound firewall shows you
+    # when it asks whether "TimeTracker Chat" may reach ntfy.sh. The watcher
+    # runs its binary directly, during a break and never otherwise.
+    CHAT_APP="$APPS_DIR/TimeTracker Chat.app"
+    CHAT_BIN="$CHAT_APP/Contents/MacOS/ttchat"
+    if [[ ! -x "$CHAT_BIN" || "$SRC_DIR/ttchat.swift" -nt "$CHAT_BIN" \
+          || $(bundle_id_of "$CHAT_APP") != "$BID_PREFIX.chat.helper" ]]; then
+        printf 'Compiling break chat helper...\n'
+        # The same build-beside-and-swap as the two helpers above.
+        HSTAGE="$APPS_DIR/.chat-build.$$"
+        rm -rf "$HSTAGE"
+        mkdir -p "$HSTAGE/TimeTracker Chat.app/Contents/MacOS"
+        HSTAGE_APP="$HSTAGE/TimeTracker Chat.app"
+        swiftc -O "$SRC_DIR/ttchat.swift" -o "$HSTAGE_APP/Contents/MacOS/ttchat"
+        cat > "$HSTAGE_APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>TimeTracker Chat</string>
+	<key>CFBundleDisplayName</key>
+	<string>TimeTracker Chat</string>
+	<key>CFBundleExecutable</key>
+	<string>ttchat</string>
+	<key>CFBundleIdentifier</key>
+	<string>$BID_PREFIX.chat.helper</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+</dict>
+</plist>
+EOF
+        codesign --force -s - "$HSTAGE_APP" >/dev/null 2>&1 || \
+            printf 'warning: could not ad-hoc sign the break chat helper\n'
+        rm -rf "$CHAT_APP"
+        mv "$HSTAGE_APP" "$APPS_DIR/"
+        rm -rf "$HSTAGE"
     fi
     # --- calendar painter ------------------------------------------------------
     # Writes the sessions you logged into a calendar of their own. Keeps the

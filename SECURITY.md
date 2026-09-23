@@ -49,7 +49,8 @@ break out of its quoting.
 ## 3. The dashboard HTTP server. MEDIUM, hardened
 
 Opening a listening socket is the only genuinely new attack surface this tool
-adds. Controls:
+adds on this machine: it is the one socket anything here listens on. (Messages,
+3f, talks to the internet, but only ever by connecting out.) Controls:
 
 | Control | Blocks |
 |---|---|
@@ -194,6 +195,80 @@ JavaScript in the active tab of each window.
 - The note text never becomes an argument or a script. It reaches the helper
   as file content.
 
+## 3f. Break chat. MEDIUM, the one thing that talks to the internet
+
+`TimeTracker Chat.app` (`ttchat.swift`), started by the watcher when a break
+begins, and gone when it ends. Off by default (`chat` in settings).
+
+What leaves the machine, and to whom. Every message, and every "I am on a
+break", is posted over HTTPS to one relay, ntfy.sh unless `chat-relay` names
+another. Nothing listens: the helper only connects out, so there is no port
+for anyone to reach and no firewall prompt.
+
+| The relay sees | The relay never sees |
+|---|---|
+| Your IP address, and your friend's | Names, yours or theirs |
+| When you are on a break, to the second | What you write |
+| That two addresses share a topic, i.e. who your friends are | Anything from the log |
+| Message sizes | The codes |
+
+Controls:
+
+| Control | Blocks |
+|---|---|
+| A 32-byte secret per friendship; topic and key derived from it by HKDF-SHA256 | A stranger finding a friendship: the topic is 192 random bits |
+| Every message sealed with ChaChaPoly, the topic as associated data | The relay, or anyone who learns a topic, reading or forging anything |
+| Authentication before parsing. The relay's own JSON envelope is the only thing read before it, and only two fields of it | Malformed input reaching any parser we wrote |
+| Freshness (±120 s), a replay set, a version, a fixed set of kinds | Captured messages replayed, or old ones arriving late |
+| `Cache: no` on every post | The relay storing anything; also why a message to a friend who is not on a break reaches nobody |
+| `Firebase: no` on every post | ntfy.sh copying the ciphertext to Google for its Android app |
+| 500 characters, one line, no control or bidi characters, 20 messages in 10 s | A friend's buggy or hostile client flooding or spoofing your break screen |
+| `https://` only, plain `http://` only to loopback | The topic crossing a network in the clear |
+| Ephemeral URLSession: no cache, no cookies | Anything about a conversation reaching disk |
+
+Where the codes are. `friends.tsv`, mode 600, written only by the chat helper
+and read by nothing else in TimeTracker. The overlay names friends by an
+eight-digit id that is not a secret. When you make a code, the helper puts it
+straight onto the clipboard, marked concealed so clipboard managers that
+honour nspasteboard.org skip it; the page never holds it. The only code the
+page ever holds is one you paste into it, on its way to the helper.
+
+Where friend text goes. Into the helper's state file, which the overlay reads,
+rebuilds field by field, and hands to the page, which sets it with
+`textContent`. It never becomes an argument, a script, a file name or HTML.
+Behind that, two things a mistake would have to get past as well. The page
+has a Content-Security-Policy that lets it load and connect to nothing. And
+the installed copy allows one script, its own, by a hash install.sh takes:
+tried against the installed page, an injected `<img onerror>` does not run,
+where under the source's `'unsafe-inline'` it did, and sent a message.
+
+Residual risks:
+
+- No forward secrecy. Both friends hold the same key for as long as the
+  friendship lasts. Whoever records the relay's traffic (its operator can)
+  and later obtains a code can read everything that code ever sealed. Keep
+  codes in Signal and `friends.tsv` only; if one leaks, remove the friend on
+  both sides and make a new code.
+- The relay learns your break schedule and your friends' addresses. That is
+  the price of a relay, and the owner decided it was acceptable. Self-hosting
+  ntfy moves it to a relay you run, by changing `chat-relay`.
+- ntfy.sh allows 250 posts a day per IP address. Behind a NAT shared with
+  other ntfy users (a campus network can be), the allowance is shared too.
+  Anyone who learns a topic can flood it; their posts fail authentication and
+  are dropped, but they can crowd out delivery.
+- "Only while both are on a break" is enforced on your own Mac. A modified
+  client could listen all day; it would still only receive what you send
+  during your own breaks.
+- A friend can put rude text on your break screen. Remove them: the code
+  stops working on your side at once.
+- A clock more than two minutes wrong drops every message as stale.
+- The bundle is user-writable code that makes network connections: section 1
+  applies to it as to every bundle here.
+
+Rule to keep: nothing but a sealed blob goes to the relay. No title, no tags,
+no plaintext header. Friend text never reaches a shell, AppleScript, argv, a
+path, or `innerHTML`.
+
 ## 4. Launcher name-squatting. MEDIUM
 
 Any app on the system can name itself `time stop`. If it outranks yours in
@@ -224,6 +299,9 @@ depth.
 what, in plain text. The data directory is mode 700. It is not encrypted
 beyond FileVault, and it goes into Time Machine and any cloud backup of your
 home directory. A shared repository or a dashboard screenshot shares it.
+
+`friends.tsv` is the one secret in the directory: each code in it is a
+friendship (3f). The same backups carry it.
 
 ## 7. The lock reaper has a narrow race. LOW
 

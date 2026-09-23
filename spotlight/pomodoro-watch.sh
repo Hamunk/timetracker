@@ -11,13 +11,16 @@
 # the file truthful, put a tomato on screen at the right moments, and hush
 # whatever is playing when it does.
 #
-# It is also the courier for the break menu's two tools. The overlay is a
+# It is also the courier for the break menu's three tools. The overlay is a
 # WKWebView that may write a handful of fixed-name files and nothing else, so
 # it cannot launch anything itself; this loop notices those files and launches
 # the app bundle that does the work — "TimeTracker Spotify" for the remote,
 # "TimeTracker Reminders" for a captured note. Both are bundles rather than
 # bare scripts for the reason pause-media.sh already documents at length:
-# permissions are granted to a name, and the name has to be stable.
+# permissions are granted to a name, and the name has to be stable. The third,
+# "TimeTracker Chat", is started here too, but for the whole break rather than
+# on request: your friends can only see you on a break while something is
+# there to be seen.
 #
 # Short sleeps + wall-clock comparison, never one long sleep: macOS suspends
 # sleeping processes across system sleep, and wall-clock math means a closed
@@ -61,6 +64,12 @@ PLAYLIST_FILE="$DATA_DIR/spotify-playlists.tsv"
 REM_FILE="$DATA_DIR/.tomato-reminder"
 REM_RESULT="$DATA_DIR/.tomato-reminder-result"
 REM_BUSY="$DATA_DIR/.tomato-reminder-busy"
+# --- break menu: messages ---
+# The helper owns both files while it runs, and deletes them as it leaves;
+# they are named here only so that one it could not clean up is cleaned up.
+CHAT_PID="$DATA_DIR/.tomato-chat.pid"
+CHAT_CMD="$DATA_DIR/.tomato-chat-cmd"
+CHAT_STATE="$DATA_DIR/.tomato-chat"
 OVERLAY_STALE=25   # two helper heartbeats plus slack
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
 HELPER_BIN="$APPS_DIR/TimeTracker Prompt.app/Contents/MacOS/ttprompt"
@@ -71,6 +80,7 @@ MEDIA_APP="$APPS_DIR/TimeTracker Media.app"
 # hand to answer that prompt before a break ever raises it.
 SPOTIFY_APP="$APPS_DIR/${TIMETRACK_VERB:-time} spotify.app"
 REMINDERS_APP="$APPS_DIR/TimeTracker Reminders.app"
+CHAT_BIN="$APPS_DIR/TimeTracker Chat.app/Contents/MacOS/ttchat"
 TICK=10
 
 # The durations all come from the settings table — the one in settings.sh.
@@ -121,7 +131,8 @@ kill_overlay()    { local pid
                     rm -f "$OVERLAY_PID" "$ALIVE_FILE" "$AUDIO_FILE"; }
 
 # Which break-menu entries the overlay may draw, as one argv word so the
-# helper's argument list stays short: "spotify,reminders", or "-" for neither.
+# helper's argument list stays short: "spotify,reminders,chat", or "-" for
+# none of them.
 #
 # A setting alone is not enough to offer a tool. Spotify needs Spotify to be
 # installed and its bundle built; capture needs the compiled EventKit helper.
@@ -137,6 +148,9 @@ menu_features() {
     fi
     if [[ "$(tt_setting reminders)" == "on" && -d "$REMINDERS_APP" ]]; then
         f="${f:+$f,}reminders"
+    fi
+    if [[ "$(tt_setting chat)" == "on" && -x "$CHAT_BIN" ]]; then
+        f="${f:+$f,}chat"
     fi
     printf '%s' "${f:--}"
 }
@@ -167,7 +181,7 @@ launch_overlay() {
     "$HELPER_BIN" overlay "$CHOICE_FILE" "$(tt_setting long_break_every)" \
         "$(tt_setting auto_accept_seconds)" "$(tt_setting easter_egg)" \
         "$(menu_features)" \
-        "$(tt_setting key_menu),$(tt_setting key_spotify),$(tt_setting key_reminder)" \
+        "$(tt_setting key_menu),$(tt_setting key_spotify),$(tt_setting key_reminder),$(tt_setting key_chat)" \
         >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$OVERLAY_PID"
 }
@@ -337,12 +351,53 @@ reminder_send() {
       rm -f "$REM_BUSY" ) &
 }
 
+# The break's chat, by pid, and only if that pid is this install's helper —
+# the same reasoning as overlay_pid, and the same failure if it were by name:
+# a scratch install's break ending would say goodbye to your friends on the
+# real one's behalf.
+chat_pid() {
+    local pid
+    read -r pid < "$CHAT_PID" 2>/dev/null || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    case "$(ps -p "$pid" -o command= 2>/dev/null)" in
+        *"ttchat break $DATA_DIR") printf '%s' "$pid" ;;
+        *)                          return 1 ;;
+    esac
+}
+
+# Up for the whole of a break and not a moment outside one. Run directly
+# rather than through `open`: it asks macOS for nothing, so there is no
+# permission for a bundle name to carry, and a direct child is one this
+# script can signal. It watches the pomodoro file itself and leaves when the
+# break does; chat_stop is the backstop for when it has not noticed yet.
+#
+# No friends is not a reason to skip it: the menu is where friends are made,
+# and making one needs the helper that holds the codes.
+chat_agent() {
+    [[ "$(tt_setting chat)" == "on" && -x "$CHAT_BIN" ]] || return 0
+    chat_pid >/dev/null && return 0
+    "$CHAT_BIN" break "$DATA_DIR" >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$CHAT_PID"
+}
+
+# SIGTERM, which the helper answers by saying goodbye to whoever is there and
+# then leaving. Cheap when there is nothing to stop, which is every tick of
+# every work block.
+chat_stop() {
+    local pid
+    [[ -f "$CHAT_PID" ]] || return 0
+    pid=$(chat_pid) && kill "$pid" 2>/dev/null
+    rm -f "$CHAT_PID"
+}
+
 # Everything the menu left lying about. Called when the tomato leaves the
 # screen and again when the cycle ends: a stale state line would have the next
 # panel open onto whatever was playing an hour ago, and a stale result would
 # show last break's "saved" over this break's empty box.
 menu_idle() {
     rm -f "$SPOT_WANT" "$SPOT_STATE" "$REM_RESULT"
+    chat_stop
+    rm -f "$CHAT_STATE" "$CHAT_CMD"
 }
 
 menu_end() {
@@ -490,6 +545,10 @@ while :; do
         if (( now - last_menu >= 2 )); then
             last_menu=$now
             if [[ -f "$SPOT_WANT" || -f "$SPOT_CMD" ]]; then spotify_agent; fi
+            # The tomato is on screen before the break is: a chat that came
+            # up at the tomato would tell your friends you were on a break
+            # while you were still deciding whether to take one.
+            [[ "$phase" == "BREAK" ]] && chat_agent
         fi
     else
         # The tomato has left the screen — skipped, snoozed, or worked

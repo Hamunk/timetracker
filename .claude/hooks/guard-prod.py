@@ -38,7 +38,7 @@ RUNTIME = ("action.sh", "start.sh", "toggle.sh", "newcat.sh", "settings.sh",
            "pomodoro-watch.sh", "paint-calendar.sh", "spotify.sh",
            "pause-media.sh", "notify.sh", "prompt.sh",
            "dashboard.py", "migrate_v2.py",
-           "ttprompt", "ttpaint", "ttremind")
+           "ttprompt", "ttpaint", "ttremind", "ttchat")
 
 # Commands that change what they are pointed at. Every argument is a target,
 # so naming the real install anywhere in one is enough.
@@ -204,8 +204,8 @@ def check_bash(command):
 
     if re.search(r"(^|\s)(pkill|killall)\s", command) and not dev:
         if any(n in command for n in
-               ("ttprompt", "pomodoro-watch", "spotify.sh", "dashboard.py",
-                "pause-media", "timetrack", "TimeTracker")):
+               ("ttprompt", "ttchat", "pomodoro-watch", "spotify.sh",
+                "dashboard.py", "pause-media", "timetrack", "TimeTracker")):
             return (
                 "Blocked: an unscoped pkill/killall is exactly what ends a "
                 "live pomodoro. Match this install's own paths, or kill by the "

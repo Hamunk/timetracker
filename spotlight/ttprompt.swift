@@ -33,9 +33,14 @@
 // Spotify agent), .tomato-reminder (one note for the EventKit helper) and
 // .tomato-found (the easter egg has been opened at least once). It
 // reads .tomato-spotify, .tomato-reminder-result, spotify-playlists.tsv and
-// reminders-list from the same place. It still launches nothing and still
-// touches no network: every action leaves here as a file, and pomodoro-watch.sh
-// is the only thing that turns a file into a running process.
+// reminders-list from the same place.
+//
+// Messages add one write, .tomato-chat-cmd (one command for the chat helper),
+// and one read, .tomato-chat (what the helper says the break's chat looks
+// like). Talking to friends is the chat helper's job and not this one's: this
+// app still launches nothing and still touches no network, and it never reads
+// friends.tsv, where the codes are. Every action leaves here as a file, and
+// pomodoro-watch.sh is the only thing that turns a file into a running process.
 // tomato.html is bundled; no network is ever touched.
 //
 // !! Careful when editing !!  An earlier revision of this file was a false
@@ -96,10 +101,10 @@ let egg = a.count > 5 ? (a[5] != "off") : true
 // already checked the settings, the app bundles and whether Spotify is even
 // installed, so this is a list of things that work, not of things enabled.
 let feat = a.count > 6 ? a[6] : "-"
-// The break screen's keys, "menu,spotify,reminder", straight from settings
-// via the watcher. Passed through to the page untouched: what a key does is
-// the page's business, and this only carries it.
-let keys = a.count > 7 ? a[7] : "Tab,s,n"
+// The break screen's keys, "menu,spotify,reminder,chat", straight from
+// settings via the watcher. Passed through to the page untouched: what a key
+// does is the page's business, and this only carries it.
+let keys = a.count > 7 ? a[7] : "Tab,s,n,m"
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
@@ -116,6 +121,13 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
     var playlists: [Playlist] = []
     var plStamp: Date? = nil
     var plSeen = false
+    // Messages: commands waiting their turn for the one command file, and the
+    // chat state as last read, re-read only when the file changes.
+    var outbox: [String] = []
+    var chatStamp: Date? = nil
+    var chatSize = -1
+    var chat: [String: Any]? = nil
+    var chatFresh = false
     init(dir: String, cyc: Int, secs: Int, egg: Bool, feat: String, keys: String) {
         self.dir = dir; self.cyc = cyc; self.secs = secs; self.egg = egg
         self.feat = feat; self.keys = keys
@@ -180,7 +192,126 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
         } else if body.hasPrefix("note.save.") {
             guard feat.contains("reminders") else { return }
             saveNote(String(body.dropFirst(10)))
+        } else if body.hasPrefix("chat.") {
+            guard feat.contains("chat") else { return }
+            chatMenu(String(body.dropFirst(5)))
         }
+    }
+
+    // Messages. The page names a friend by the id it was sent — eight hex
+    // digits, not a secret — and the chat helper resolves it. The only text
+    // the page supplies is a message, a friend's name, or a code that was
+    // pasted into it, and each leaves as one TSV line in a file: never an
+    // argument, never script. Nothing here can make the helper reveal a code;
+    // "copy" puts one on the clipboard, which the page cannot read.
+    func chatMenu(_ a: String) {
+        func friend(_ s: Substring) -> String? {
+            let t = String(s)
+            return t.count == 8 && t.allSatisfy({ "0123456789abcdef".contains($0) }) ? t : nil
+        }
+        if a.hasPrefix("send.") {
+            let r = a.dropFirst(5)
+            guard let dot = r.firstIndex(of: "."), let f = friend(r[..<dot]) else { return }
+            let text = String(oneLine(String(r[r.index(after: dot)...])).prefix(500))
+            guard !text.isEmpty else { return }
+            chatQueue("send\t\(f)\t\(text)")
+        } else if a.hasPrefix("invite.") {
+            let n = String(oneLine(String(a.dropFirst(7))).prefix(40))
+            guard !n.isEmpty else { return }
+            chatQueue("invite\t\(n)")
+        } else if a.hasPrefix("join.") {
+            // join.<code>.<name>. A code is base64url, which has no dot in
+            // it, so the first dot ends the code whatever the name contains.
+            let r = a.dropFirst(5)
+            guard let dot = r.firstIndex(of: ".") else { return }
+            let code = String(r[..<dot])
+            let n = String(oneLine(String(r[r.index(after: dot)...])).prefix(40))
+            let b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            guard code.hasPrefix("tt1-"), code.count <= 80, !n.isEmpty,
+                  code.dropFirst(4).allSatisfy({ b64url.contains($0) }) else { return }
+            chatQueue("join\t\(n)\t\(code)")
+        } else if a.hasPrefix("copy."), let f = friend(a.dropFirst(5)) {
+            chatQueue("copy\t\(f)")
+        } else if a.hasPrefix("forget."), let f = friend(a.dropFirst(7)) {
+            chatQueue("forget\t\(f)")
+        }
+    }
+
+    func chatQueue(_ line: String) {
+        guard outbox.count < 50 else { return }
+        outbox.append(line)
+        chatFlush()
+    }
+
+    // One command on disk at a time, and the next only once the helper has
+    // taken the last: two messages typed inside one of its polls must queue,
+    // not overwrite. Until the helper is up — it starts a moment after the
+    // break does — they simply wait here.
+    func chatFlush() {
+        guard let next = outbox.first,
+              !FileManager.default.fileExists(atPath: path(".tomato-chat-cmd")) else { return }
+        writeResult(next + "\n", to: path(".tomato-chat-cmd"))
+        outbox.removeFirst()
+    }
+
+    func loadChat() {
+        let p = path(".tomato-chat")
+        let attrs = try? FileManager.default.attributesOfItem(atPath: p)
+        let stamp = attrs?[.modificationDate] as? Date
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? -1
+        if stamp == chatStamp && size == chatSize { return }
+        chatStamp = stamp
+        chatSize = size
+        chatFresh = true
+        if let d = FileManager.default.contents(atPath: p),
+           let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+            chat = chatState(o)
+        } else {
+            chat = nil
+        }
+    }
+
+    // The helper wrote this, but it sits in a directory the user can write,
+    // and half of what is in it was typed on somebody else's machine. So it
+    // is rebuilt here field by field — known keys, known types, bounded
+    // strings — rather than passed through: the same courtesy the Spotify
+    // state line gets, for text that has come a good deal further.
+    func chatState(_ o: [String: Any]) -> [String: Any] {
+        func hex8(_ v: Any?) -> String? {
+            guard let s = v as? String, s.count == 8,
+                  s.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
+            return s
+        }
+        func text(_ v: Any?, _ n: Int) -> String {
+            return String(oneLine((v as? String) ?? "").prefix(n))
+        }
+        var out: [String: Any] = ["run": text(o["run"], 16)]
+        let r = (o["relay"] as? [String: Any]) ?? [:]
+        out["relay"] = ["ok": (r["ok"] as? Bool) ?? false, "x": text(r["x"], 200)] as [String: Any]
+        var friends: [[String: Any]] = []
+        for f in ((o["friends"] as? [[String: Any]]) ?? []).prefix(20) {
+            guard let id = hex8(f["id"]) else { continue }
+            friends.append(["id": id, "n": text(f["n"], 40), "on": (f["on"] as? Bool) ?? false])
+        }
+        out["friends"] = friends
+        var log: [[String: Any]] = []
+        for m in ((o["log"] as? [[String: Any]]) ?? []).suffix(200) {
+            guard let q = m["q"] as? Int, let f = hex8(m["f"]) else { continue }
+            let st = (m["s"] as? String) ?? ""
+            log.append(["q": q, "f": f, "me": (m["me"] as? Bool) ?? false,
+                        "x": text(m["x"], 500), "t": (m["t"] as? Int) ?? 0,
+                        "s": ["sending", "sent", "failed"].contains(st) ? st : ""])
+        }
+        out["log"] = log
+        let kinds = ["invited", "joined", "copied", "forgot", "bad", "error"]
+        if let n = o["note"] as? [String: Any], let q = n["q"] as? Int,
+           let k = n["k"] as? String, kinds.contains(k) {
+            var note: [String: Any] = ["q": q, "k": k, "x": text(n["x"], 200),
+                                       "n": text(n["n"], 40)]
+            if let id = hex8(n["id"]) { note["id"] = id }
+            out["note"] = note
+        }
+        return out
     }
 
     func spotifyCommand(_ cmd: String) {
@@ -303,6 +434,16 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
                 if !t.isEmpty { list = String(t.prefix(60)) }
             }
             payload["remlist"] = list
+        }
+        if feat.contains("chat") {
+            chatFlush()
+            loadChat()
+            // Sent when it changes, not twice a second: a break's worth of
+            // messages is the one part of this payload that can be large.
+            if chatFresh {
+                payload["chat"] = chat ?? NSNull()
+                chatFresh = false
+            }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               var json = String(data: data, encoding: .utf8) else { return }

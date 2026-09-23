@@ -1,8 +1,8 @@
 // TimeTracker break chat. The one program in TimeTracker that talks to the
-// internet, and it talks to exactly one place: the relay, ntfy.sh unless told
-// otherwise, outbound, over HTTPS. Nothing listens. There is no socket here for
-// anybody to connect to, which is the difference between this and every
-// peer-to-peer design that was considered first.
+// internet, and it talks to exactly one place: the relay, ntfy.sh unless
+// chat-relay says otherwise, outbound, over HTTPS. Nothing listens. There is
+// no socket here for anybody to connect to, which is the difference between
+// this and every peer-to-peer design that was considered first.
 //
 // Why a relay at all, when the brief was "no server": two Macs on two
 // eduroams, or behind two home routers, can neither find nor reach each other
@@ -14,17 +14,19 @@
 // stored nowhere, and that is also what makes "only friends who are on a
 // break" true — a message to someone who is working has nobody to arrive at.
 //
-// A friendship is one 32-byte secret, made on one Mac by `ttchat code` and
-// carried to the other over something both people already trust — Signal.
-// Everything else is derived from it: the topic both subscribe to, and the
-// key every message is sealed with. Nothing that says who you are is ever
-// outside the seal, and the relay cannot forge anything that opens.
+// A friendship is one 32-byte secret, made on one Mac and carried to the
+// other over something both people already trust — Signal. Everything else is
+// derived from it: the topic both subscribe to, and the key every message is
+// sealed with. Nothing that says who you are is ever outside the seal, and the
+// relay cannot forge anything that opens.
 //
+//   ttchat break <dir>           the break's chat, started by pomodoro-watch.sh
+//                                when a break begins; exits when it ends
 //   ttchat code                  a fresh pairing code, on stdout
 //   ttchat peer <relay> <code>   one friendship, headless: each stdin line is
 //                                sent, each event is a TSV line on stdout, and
 //                                stdin closing says goodbye and exits. What
-//                                chat.test.py drives.
+//                                chat.test.py drives as "the friend".
 //   ttchat seal <code> <json>    seal one raw envelope; prints topic<TAB>blob.
 //                                For the tests only: a stale, replayed or
 //                                malformed message that is nevertheless
@@ -32,7 +34,18 @@
 //                                is refused for the right reason. It can make
 //                                nothing the holder of the code could not.
 //
-// Events, one per line:
+// Break mode's files, all in <dir>, all fixed names:
+//
+//   friends.tsv          id, name, code, added. The codes are the friendships,
+//                        so this file is 600 and this program is its only
+//                        writer. Nothing else in TimeTracker reads a code.
+//   chat-relay           optional: the relay, one URL. Absent means ntfy.sh.
+//   .tomato-chat-cmd     one command from the overlay, consumed here
+//   .tomato-chat         what the overlay shows: friends, who is on a break,
+//                        this break's messages. Deleted when the break ends.
+//   .tomato-chat.lock    one of these per data directory, ever
+//
+// Peer-mode events, one per line:
 //
 //   open                     subscribed; "hello" has been sent
 //   here  <session>          a friend is on a break
@@ -40,8 +53,10 @@
 //   text  <session> <text>   they said something
 //   sent  <kind>             the relay accepted one of ours
 //   drop  <reason>           something arrived and was refused
-//   error <detail>           the relay, or the network, said no
+//   down  <detail>           the stream to the relay broke; retrying
+//   error <detail>           the relay refused something we sent
 
+import AppKit
 import CryptoKit
 import Foundation
 
@@ -58,9 +73,13 @@ let window = 120.0
 // does not linger through the next work block.
 let liveEvery = 120.0
 let goneAfter = 300.0
+// One stream per friend, and ntfy.sh allows thirty per address.
+let maxFriends = 20
+let maxName = 40
 let kinds: Set<String> = ["hello", "here", "live", "text", "bye"]
 let codePrefix = "tt1-"
 let wirePrefix = "tt1:"
+let defaultRelay = "https://ntfy.sh"
 let badCode = "not a pairing code, or one that lost a character on the way"
 
 func b64url(_ d: Data) -> String {
@@ -129,9 +148,11 @@ func randomID() -> String {
     return String(format: "%016llx", g.next() as UInt64)
 }
 
-func isID(_ s: String) -> Bool {
-    return s.count == 16 && s.allSatisfy { "0123456789abcdef".contains($0) }
+func isHex(_ s: String, _ n: Int) -> Bool {
+    return s.count == n && s.allSatisfy { "0123456789abcdef".contains($0) }
 }
+
+func isID(_ s: String) -> Bool { return isHex(s, 16) }
 
 // Friend text is the first thing in this program that was written on somebody
 // else's machine. One line; no control characters; and none of the
@@ -181,7 +202,7 @@ final class Chat: NSObject, URLSessionDataDelegate {
     let topic: String
     let key: SymmetricKey
     let me = randomID()
-    let emit: (String) -> Void
+    let emit: ([String]) -> Void
 
     var stream: URLSessionDataTask?
     var why: String?
@@ -206,7 +227,7 @@ final class Chat: NSObject, URLSessionDataDelegate {
                                  delegateQueue: OperationQueue.main)
     let post = URLSession(configuration: quiet())
 
-    init(relay: URL, secret: Data, emit: @escaping (String) -> Void) {
+    init(relay: URL, secret: Data, emit: @escaping ([String]) -> Void) {
         self.relay = relay
         (topic, key) = derive(secret)
         self.emit = emit
@@ -270,7 +291,7 @@ final class Chat: NSObject, URLSessionDataDelegate {
         guard task === stream else { return }
         stream = nil
         if stopping { return }
-        emit("error\t" + clean(why ?? error?.localizedDescription ?? "the relay closed the stream"))
+        emit(["down", clean(why ?? error?.localizedDescription ?? "the relay closed the stream")])
         let wait = slow ? 60 : backoff
         backoff = min(backoff * 2, 30)
         DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in self?.subscribe() }
@@ -285,14 +306,14 @@ final class Chat: NSObject, URLSessionDataDelegate {
               let ev = o["event"] as? String else { return }
         if ev == "open" {
             backoff = 2
-            emit("open")
+            emit(["open"])
             say("hello")
         } else if ev == "message", let m = o["message"] as? String {
             receive(m)
         }
     }
 
-    func drop(_ reason: String) { emit("drop\t" + reason) }
+    func drop(_ reason: String) { emit(["drop", reason]) }
 
     // The order is the argument. Nothing is decoded until it has been shown
     // to come from somebody holding the code; nothing is acted on until it is
@@ -342,29 +363,29 @@ final class Chat: NSObject, URLSessionDataDelegate {
             let c = clean(x)
             guard !c.isEmpty else { return drop("malformed") }
             arrive(s)
-            emit("text\t\(s)\t\(c)")
+            emit(["text", s, c])
         default:
             leave(s)
         }
     }
 
     func arrive(_ s: String) {
-        if present[s] == nil { emit("here\t" + s) }
+        if present[s] == nil { emit(["here", s]) }
         present[s] = Date()
     }
 
     func leave(_ s: String) {
-        if present.removeValue(forKey: s) != nil { emit("gone\t" + s) }
+        if present.removeValue(forKey: s) != nil { emit(["gone", s]) }
     }
 
-    func send(_ raw: String) {
+    func send(_ raw: String, then done: ((Bool) -> Void)? = nil) {
         let x = clean(raw)
-        guard !x.isEmpty, !stopping else { return }
+        guard !x.isEmpty, !stopping else { done?(false); return }
         let now = Date()
         said = said.filter { now.timeIntervalSince($0) < 10 }
-        guard said.count < 10 else { emit("error\tslow down"); return }
+        guard said.count < 10 else { emit(["error", "slow down"]); done?(false); return }
         said.append(now)
-        say("text", x)
+        say("text", x, then: done)
     }
 
     func say(_ kind: String, _ text: String? = nil, then done: ((Bool) -> Void)? = nil) {
@@ -390,12 +411,12 @@ final class Chat: NSObject, URLSessionDataDelegate {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if code == 200 {
-                    self.emit("sent\t" + kind)
+                    self.emit(["sent", kind])
                 } else if code == 429 {
-                    self.emit("error\tthe relay is rate-limiting this address")
+                    self.emit(["error", "the relay is rate-limiting this address"])
                 } else {
-                    self.emit("error\t" + clean(err?.localizedDescription
-                                                ?? "the relay answered \(code)"))
+                    self.emit(["error", clean(err?.localizedDescription
+                                              ?? "the relay answered \(code)")])
                 }
                 done?(code == 200)
             }
@@ -417,11 +438,340 @@ final class Chat: NSObject, URLSessionDataDelegate {
     }
 }
 
+// --- break mode --------------------------------------------------------------
+// Everything a break's chat is, for as long as the break lasts: one Chat per
+// friend, the commands the overlay sends, and the state file it draws from.
+//
+// The overlay never holds a code it did not have typed into it. It names
+// friends by an id that is not a secret; this program resolves the id, and it
+// is this program — not the overlay — that puts a new code on the clipboard.
+// A page that somehow began saying things it shouldn't could therefore ask for
+// a code to be copied, and could never read one.
+
+struct Friend {
+    let id: String
+    let name: String
+    let code: String
+    let secret: Data
+    let added: Int
+}
+
+func writePrivate(_ path: String, _ data: Data) {
+    // Written beside the target and renamed over it, so a reader never sees
+    // half a file; created 600, because two of the three files written this
+    // way hold codes, and the third holds what your friends said to you.
+    let tmp = path + ".\(getpid()).tmp"
+    guard FileManager.default.createFile(atPath: tmp, contents: data,
+                                         attributes: [.posixPermissions: 0o600])
+    else { return }
+    if rename(tmp, path) != 0 { unlink(tmp) }
+}
+
+// Clipboard managers that honour the nspasteboard.org conventions do not
+// record an item marked concealed, and a friendship's code sitting in a
+// clipboard history for months is one more place for it to leak from.
+//
+// TTCHAT_CLIPBOARD=off is for chat.test.py. The clipboard is one of the
+// things on this machine that is shared with whoever is using it, like
+// Spotify: a test run that pairs a dozen fake friends must not leave the last
+// of their codes where your next Cmd-V was going to find a sentence.
+func copyToClipboard(_ s: String) {
+    if ProcessInfo.processInfo.environment["TTCHAT_CLIPBOARD"] == "off" { return }
+    let pb = NSPasteboard.general
+    let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    pb.clearContents()
+    pb.declareTypes([.string, concealed], owner: nil)
+    pb.setString(s, forType: .string)
+    pb.setString("", forType: concealed)
+}
+
+final class Room {
+    let dir: String
+    let watcher: String
+    let run = randomID()
+    let started = Date()
+    var relay: URL?
+    var relayProblem: String?
+    var friends: [Friend] = []
+    var chats: [String: Chat] = [:]
+    var down: [String: String] = [:]
+    var log: [[String: Any]] = []
+    var q = 0
+    var note: [String: Any]?
+    var queued = false
+    var leaving = false
+    var timers: [DispatchSourceTimer] = []
+
+    init(dir: String, watcher: String) {
+        self.dir = dir
+        self.watcher = watcher
+    }
+
+    func path(_ name: String) -> String { return dir + "/" + name }
+
+    func start() {
+        let raw = (try? String(contentsOfFile: path("chat-relay"), encoding: .utf8))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        relay = relayURL(raw.isEmpty ? defaultRelay : raw)
+        if relay == nil { relayProblem = "chat-relay names a relay that is not https://" }
+        friends = loadFriends()
+        for f in friends { connect(f) }
+        changed()
+        every(0.25) { [weak self] in self?.poll() }
+        every(1) { [weak self] in self?.watch() }
+    }
+
+    func every(_ secs: Double, _ f: @escaping () -> Void) {
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + secs, repeating: secs)
+        t.setEventHandler(handler: f)
+        t.resume()
+        timers.append(t)
+    }
+
+    // The break is the lifetime. The same watcher's cycle, still in BREAK —
+    // anything else, and this is over: back to work, a skipped break, a
+    // stopped timer, a new cycle. Three hours is the backstop the Spotify
+    // agent has too, for the case nothing here can see.
+    func watch() {
+        let f = (try? String(contentsOfFile: path("pomodoro"), encoding: .utf8))?
+            .split(separator: "\n").first?.components(separatedBy: "\t") ?? []
+        if f.count < 7 || f[0] != "BREAK" || f[6] != watcher
+            || Date().timeIntervalSince(started) > 3 * 3600 { leave() }
+    }
+
+    func leave() {
+        if leaving { return }
+        leaving = true
+        for t in timers { t.cancel() }
+        var left = chats.count
+        let done = { [dir] in
+            // What was said in this break goes with it.
+            unlink(dir + "/.tomato-chat")
+            unlink(dir + "/.tomato-chat-cmd")
+            exit(0)
+        }
+        if left == 0 { done() }
+        for c in chats.values {
+            c.stop { left -= 1; if left == 0 { done() } }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: done)
+    }
+
+    func loadFriends() -> [Friend] {
+        guard let raw = try? String(contentsOfFile: path("friends.tsv"), encoding: .utf8)
+        else { return [] }
+        var out: [Friend] = []
+        for line in raw.split(separator: "\n") {
+            // The header, and any row this program did not write, fall out
+            // here: an id that is not eight hex digits, or a code that fails
+            // its own check.
+            let f = line.components(separatedBy: "\t")
+            guard f.count >= 3, isHex(f[0], 8), let s = parseCode(f[2]) else { continue }
+            let name = String(clean(f[1]).prefix(maxName))
+            guard !name.isEmpty,
+                  !out.contains(where: { $0.id == f[0] || $0.secret == s }) else { continue }
+            out.append(Friend(id: f[0], name: name,
+                              code: f[2].trimmingCharacters(in: .whitespaces), secret: s,
+                              added: f.count > 3 ? Int(f[3]) ?? 0 : 0))
+            if out.count == maxFriends { break }
+        }
+        return out
+    }
+
+    func saveFriends() {
+        var s = "id\tname\tcode\tadded\n"
+        for f in friends { s += "\(f.id)\t\(f.name)\t\(f.code)\t\(f.added)\n" }
+        writePrivate(path("friends.tsv"), Data(s.utf8))
+    }
+
+    func connect(_ f: Friend) {
+        guard let relay = relay else { return }
+        let id = f.id
+        let c = Chat(relay: relay, secret: f.secret) { [weak self] ev in self?.event(id, ev) }
+        chats[id] = c
+        c.start()
+    }
+
+    func event(_ id: String, _ ev: [String]) {
+        switch ev[0] {
+        case "open":
+            down[id] = nil
+        case "down":
+            down[id] = ev.count > 1 ? ev[1] : "the relay is unreachable"
+        case "error":
+            tell("error", x: ev.count > 1 ? ev[1] : "the relay refused a message")
+        case "text":
+            guard ev.count > 2 else { return }
+            append(["f": id, "me": false, "x": ev[2]])
+        case "here", "gone":
+            break
+        default:
+            return
+        }
+        changed()
+    }
+
+    func append(_ entry: [String: Any]) {
+        q += 1
+        var e = entry
+        e["q"] = q
+        e["t"] = Int(Date().timeIntervalSince1970)
+        log.append(e)
+        if log.count > 200 { log.removeFirst(log.count - 200) }
+    }
+
+    func tell(_ kind: String, id: String? = nil, x: String = "") {
+        q += 1
+        var n: [String: Any] = ["q": q, "k": kind, "x": x]
+        if let id = id, let f = friends.first(where: { $0.id == id }) {
+            n["id"] = id
+            n["n"] = f.name
+        }
+        note = n
+    }
+
+    // Many things can change in one pass through the run loop; the file is
+    // written once, at the end of it.
+    func changed() {
+        if queued { return }
+        queued = true
+        DispatchQueue.main.async { [weak self] in
+            self?.queued = false
+            self?.writeState()
+        }
+    }
+
+    func writeState() {
+        if leaving { return }
+        let problem = relayProblem ?? down.values.first
+        let state: [String: Any] = [
+            "v": 1, "run": run,
+            "relay": ["ok": problem == nil, "x": problem ?? ""] as [String: Any],
+            "friends": friends.map { f -> [String: Any] in
+                ["id": f.id, "n": f.name, "on": !(chats[f.id]?.present.isEmpty ?? true)]
+            },
+            "log": log,
+            "note": note ?? NSNull()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: state) else { return }
+        writePrivate(path(".tomato-chat"), data)
+    }
+
+    // One command from the overlay. The file sits in a directory the user can
+    // write, so every field is checked here again, however carefully the
+    // overlay checked it before writing: this is the program holding the codes.
+    func poll() {
+        let p = path(".tomato-chat-cmd")
+        guard let raw = try? String(contentsOfFile: p, encoding: .utf8) else { return }
+        unlink(p)
+        let f = (raw.split(separator: "\n").first.map(String.init) ?? "")
+            .components(separatedBy: "\t")
+        switch (f[0], f.count) {
+        case ("send", 3) where isHex(f[1], 8):  sendText(f[1], f[2])
+        case ("invite", 2):                     invite(f[1])
+        case ("join", 3):                       join(f[1], f[2])
+        case ("copy", 2) where isHex(f[1], 8):  copy(f[1])
+        case ("forget", 2) where isHex(f[1], 8): forget(f[1])
+        default: return
+        }
+        changed()
+    }
+
+    func sendText(_ id: String, _ raw: String) {
+        let x = clean(raw)
+        guard !x.isEmpty, let f = friends.first(where: { $0.id == id }),
+              let c = chats[id] else { return }
+        // With Cache: no, a message to somebody not on a break is a message
+        // to nobody. Saying so beats a bubble that looks sent.
+        guard !c.present.isEmpty else {
+            return tell("error", id: id, x: "\(f.name) isn’t on a break")
+        }
+        append(["f": id, "me": true, "x": x, "s": "sending"])
+        let mine = q
+        c.send(x) { [weak self] ok in
+            guard let self = self,
+                  let i = self.log.firstIndex(where: { ($0["q"] as? Int) == mine }) else { return }
+            self.log[i]["s"] = ok ? "sent" : "failed"
+            self.changed()
+        }
+    }
+
+    func name(_ raw: String) -> String? {
+        let n = String(clean(raw).prefix(maxName))
+        return n.isEmpty ? nil : n
+    }
+
+    func newID() -> String {
+        while true {
+            let id = String(format: "%08x", UInt32.random(in: .min ... .max))
+            if !friends.contains(where: { $0.id == id }) { return id }
+        }
+    }
+
+    func add(_ name: String, code: String, secret: Data) -> Friend {
+        let f = Friend(id: newID(), name: name, code: code, secret: secret,
+                       added: Int(Date().timeIntervalSince1970))
+        friends.append(f)
+        saveFriends()
+        connect(f)
+        return f
+    }
+
+    // Making a code makes the friendship: the other side joins it when they
+    // paste. The code goes straight onto the clipboard for the Signal message
+    // it is meant for, and nowhere else.
+    func invite(_ raw: String) {
+        guard let n = name(raw) else { return tell("bad", x: "Give them a name first") }
+        guard friends.count < maxFriends else {
+            return tell("bad", x: "That is \(maxFriends) friends, which is the most there is room for")
+        }
+        let code = newCode()
+        let f = add(n, code: code, secret: parseCode(code)!)
+        copyToClipboard(code)
+        tell("invited", id: f.id)
+    }
+
+    func join(_ raw: String, _ pasted: String) {
+        guard let n = name(raw) else { return tell("bad", x: "Give them a name first") }
+        let code = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let secret = parseCode(code) else {
+            return tell("bad", x: "That is not a whole code. Ask them to send it again")
+        }
+        if let old = friends.first(where: { $0.secret == secret }) {
+            return tell("bad", x: "That code is already \(old.name)")
+        }
+        guard friends.count < maxFriends else {
+            return tell("bad", x: "That is \(maxFriends) friends, which is the most there is room for")
+        }
+        tell("joined", id: add(n, code: code, secret: secret).id)
+    }
+
+    func copy(_ id: String) {
+        guard let f = friends.first(where: { $0.id == id }) else { return }
+        copyToClipboard(f.code)
+        tell("copied", id: id)
+    }
+
+    // Unfriending is deleting the row. The code stops working here at once;
+    // on their side it keeps its row until they remove it too, and until then
+    // they simply never see you on a break again.
+    func forget(_ id: String) {
+        guard let f = friends.first(where: { $0.id == id }) else { return }
+        chats.removeValue(forKey: id)?.stop {}
+        down[id] = nil
+        friends.removeAll { $0.id == id }
+        log.removeAll { ($0["f"] as? String) == id }
+        saveFriends()
+        tell("forgot", x: f.name)
+    }
+}
+
 setvbuf(stdout, nil, _IOLBF, 0)
 let args = CommandLine.arguments
 
 func usage() -> Never {
-    fputs("usage: ttchat code | peer <relay> <code> | seal <code> <json>\n", stderr)
+    fputs("usage: ttchat break <dir> | code | peer <relay> <code> | seal <code> <json>\n", stderr)
     exit(2)
 }
 
@@ -430,7 +780,34 @@ func need<T>(_ v: T?, _ why: String) -> T {
     return v
 }
 
+var signals: [DispatchSourceSignal] = []
+func onSignal(_ f: @escaping () -> Void) {
+    for n in [SIGTERM, SIGINT] {
+        signal(n, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: n, queue: .main)
+        src.setEventHandler(handler: f)
+        src.resume()
+        signals.append(src)
+    }
+}
+
 switch args.count > 1 ? args[1] : "" {
+case "break":
+    // Handed a directory, never a file name, and only one that has a cycle in
+    // it: double-clicking the bundle, or `open -a` with a stray path, starts
+    // nothing.
+    guard args.count == 3, args[2].hasPrefix("/") else { usage() }
+    let dir = args[2]
+    let f = (try? String(contentsOfFile: dir + "/pomodoro", encoding: .utf8))?
+        .split(separator: "\n").first?.components(separatedBy: "\t") ?? []
+    guard f.count >= 7, f[0] == "BREAK" else { exit(0) }
+    // Two of these would say every hello twice and fight over one state file.
+    let lock = open(dir + "/.tomato-chat.lock", O_CREAT | O_RDWR, 0o600)
+    guard lock >= 0, flock(lock, LOCK_EX | LOCK_NB) == 0 else { exit(0) }
+    let room = Room(dir: dir, watcher: f[6])
+    room.start()
+    onSignal { room.leave() }
+    dispatchMain()
 case "code":
     print(newCode())
 case "seal":
@@ -442,21 +819,16 @@ case "seal":
 case "peer":
     guard args.count == 4 else { usage() }
     let relay = need(relayURL(args[2]), "the relay must be https://, or http:// to this machine")
-    let chat = Chat(relay: relay, secret: need(parseCode(args[3]), badCode)) { print($0) }
+    let chat = Chat(relay: relay, secret: need(parseCode(args[3]), badCode)) {
+        print($0.joined(separator: "\t"))
+    }
     chat.start()
     let quit = { chat.stop { exit(0) } }
     Thread {
         while let line = readLine() { DispatchQueue.main.async { chat.send(line) } }
         DispatchQueue.main.async(execute: quit)
     }.start()
-    var signals: [DispatchSourceSignal] = []
-    for n in [SIGTERM, SIGINT] {
-        signal(n, SIG_IGN)
-        let src = DispatchSource.makeSignalSource(signal: n, queue: .main)
-        src.setEventHandler(handler: quit)
-        src.resume()
-        signals.append(src)
-    }
+    onSignal(quit)
     dispatchMain()
 default:
     usage()

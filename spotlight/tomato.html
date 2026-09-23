@@ -14,6 +14,17 @@
      standalone for visual testing (#demo=game opens the easter egg on a
      break). No network, no libraries. -->
 <html lang="en"><head><meta charset="utf-8">
+<!-- Nothing loads and nothing connects. It was true of this page before it
+     showed text written on another machine; since Messages, it is also
+     enforced, so that a message which somehow got past the chat helper's
+     cleaning and past textContent would still have nowhere to send anything.
+     install.sh swaps 'unsafe-inline' for scripts, below, for the hash of the
+     one script on this page, so the installed copy runs that script and no
+     other: not an injected onerror="", which 'unsafe-inline' would allow. The
+     source keeps it so the page still opens in a browser for the #demo views. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none';
+  script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;
+  connect-src 'none'; form-action 'none'; base-uri 'none'">
 <title>Pomodoro</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
@@ -84,8 +95,8 @@ border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);
 font:inherit;font-size:1.7vh}
 .particle{position:fixed;pointer-events:none;will-change:transform,opacity}
 /* ---- the break menu -------------------------------------------------------
-   Two tools that hang off a break: the Spotify remote and a capture box for
-   Apple Reminders. Like the game below it this is its own layer above the
+   Three tools that hang off a break: the Spotify remote, a capture box for
+   Apple Reminders, and Messages. Like the game below it this is its own layer above the
    stage, because the stage is rebuilt from scratch every time the phase
    changes and a panel you were typing in must not be rebuilt with it.
 
@@ -101,6 +112,11 @@ gap:.75vh;cursor:pointer;color:rgba(255,255,255,.45);z-index:7;
 transition:color .18s ease,border-color .18s ease,background .18s ease,
 opacity .2s ease}
 #burger.show{display:flex}
+/* A message arrived while the menu was shut. The only thing on the break
+   screen that says so: no sound, no banner, a dot where the menu is. */
+#burger .bdot{position:absolute;top:-.25vh;right:-.25vh;width:1.3vh;height:1.3vh;
+border-radius:50%;background:#e5484d;border:.22vh solid #000;display:none}
+#burger.unread .bdot{display:block}
 #burger span{display:block;width:1.9vh;height:.19vh;background:currentColor;
 border-radius:1px;transition:transform .2s ease,opacity .2s ease}
 #burger:hover{color:#f6efe9;border-color:rgba(255,255,255,.5);
@@ -150,6 +166,12 @@ transition:background .13s ease}
 .mrow:hover{background:rgba(255,255,255,.09)}
 .mrow .glyph{width:3.4vh;height:3.4vh;flex:none;display:block;border-radius:.9vh}
 .mrow .chev{margin-left:auto;opacity:.3}
+.mrow[hidden]{display:none}
+.mrow .mcount{margin-left:auto;min-width:2.2vh;height:2.2vh;border-radius:1.1vh;
+padding:0 .65vh;background:#e5484d;color:#fff;font-size:1.3vh;font-weight:600;
+display:none;align-items:center;justify-content:center}
+.mrow .mcount.on{display:flex}
+.mrow .mcount.on+.chev{margin-left:1.2vh}
 .mrow .chev svg{width:1.4vh;height:1.4vh;display:block}
 
 /* ---- Spotify view ---- */
@@ -266,6 +288,101 @@ vertical-align:-.2vh;margin-right:.7vh;animation:nspin .8s linear infinite}
 @keyframes nspin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){#nstat .sp{animation:none}}
 
+/* ---- messages view ----
+   The one panel whose text was written somewhere else. Every string in it
+   arrives through textContent, never innerHTML, and the policy at the top of
+   the page lets it load nothing and reach nothing. Same warm palette as the
+   capture box; the tomato red is yours, the grey is theirs. */
+#mchat{max-height:78vh}
+.chv{display:none;flex-direction:column;min-height:0}
+.chv.on{display:flex}
+.chsub{font-size:1.4vh;color:rgba(246,239,233,.45);white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis;min-width:0}
+.chsub.on{color:#68d391}
+#chfriends{padding:.8vh .8vh 0;overflow-y:auto;overscroll-behavior:contain;
+max-height:44vh}
+.chf{display:flex;align-items:center;gap:1.3vh;padding:1vh;border-radius:1vh;
+cursor:pointer;transition:background .12s ease}
+.chf:hover{background:rgba(255,255,255,.09)}
+.chav{width:3.6vh;height:3.6vh;border-radius:50%;flex:none;position:relative;
+display:flex;align-items:center;justify-content:center;
+font-size:1.7vh;font-weight:600;color:#fff}
+.chav i{position:absolute;right:-.15vh;bottom:-.15vh;width:1.15vh;height:1.15vh;
+border-radius:50%;background:#68d391;border:.25vh solid #151515;display:none}
+.chf.on .chav i{display:block}
+.chft{min-width:0;flex:1;display:flex;flex-direction:column;gap:.2vh}
+.chft b{font-size:1.8vh;font-weight:500;white-space:nowrap;overflow:hidden;
+text-overflow:ellipsis}
+.chft span{font-size:1.4vh;color:rgba(246,239,233,.45)}
+.chf.on .chft span{color:#68d391}
+.chn{flex:none;min-width:2.2vh;height:2.2vh;border-radius:1.1vh;padding:0 .65vh;
+background:#e5484d;color:#fff;font-size:1.3vh;font-weight:600;
+display:flex;align-items:center;justify-content:center}
+.chf .chev{opacity:.3;flex:none}
+.chf .chev svg{width:1.4vh;height:1.4vh;display:block}
+.chaddrow{display:flex;align-items:center;gap:1.3vh;margin:.2vh .8vh .4vh;
+padding:1vh;border-radius:1vh;cursor:pointer;font-size:1.7vh;
+color:rgba(246,239,233,.7);transition:background .12s ease,color .12s ease}
+.chaddrow:hover{background:rgba(255,255,255,.09);color:#f6efe9}
+.chaddrow .plus{width:3.6vh;height:3.6vh;border-radius:50%;flex:none;
+border:1px dashed rgba(246,239,233,.35);display:flex;align-items:center;
+justify-content:center;font-size:2vh;font-weight:300}
+.chempty{padding:1vh 1.8vh .6vh;font-size:1.5vh;color:rgba(246,239,233,.55);
+line-height:1.55}
+.chline{padding:.2vh 1.8vh 1.3vh;font-size:1.4vh;line-height:1.5;
+color:rgba(246,239,233,.5);min-height:2vh}
+.chline.bad{color:#ff9d8a}
+.chline.ok{color:#68d391}
+#chlog{display:flex;flex-direction:column;gap:.6vh;padding:1.4vh 1.4vh .6vh;
+overflow-y:auto;overscroll-behavior:contain;height:38vh}
+#chlog::-webkit-scrollbar,#chfriends::-webkit-scrollbar{width:.7vh}
+#chlog::-webkit-scrollbar-thumb,#chfriends::-webkit-scrollbar-thumb{
+background:rgba(255,255,255,.18);border-radius:.4vh}
+.chb{max-width:78%;padding:.9vh 1.3vh;border-radius:1.6vh;font-size:1.75vh;
+line-height:1.4;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.chb.them{align-self:flex-start;background:rgba(255,255,255,.09);
+border-bottom-left-radius:.5vh}
+.chb.me{align-self:flex-end;background:#e5484d;color:#fff;
+border-bottom-right-radius:.5vh}
+.chb.me.wait{opacity:.55}
+.chb.me.fail{background:none;border:1px solid rgba(255,157,138,.6);color:#ff9d8a}
+.chmeta{align-self:flex-end;font-size:1.2vh;color:#ff9d8a;margin-top:-.3vh}
+.chnone{margin:auto;padding:0 2.4vh;text-align:center;font-size:1.5vh;
+line-height:1.55;color:rgba(246,239,233,.42)}
+.chin{display:flex;gap:1vh;padding:1vh 1.4vh 0}
+.chin input,#chform input{flex:1;min-width:0;font:inherit;font-size:1.75vh;
+color:#f6efe9;background:rgba(255,255,255,.05);
+border:1px solid rgba(255,255,255,.13);border-radius:1.1vh;padding:1vh 1.3vh;
+user-select:text;-webkit-user-select:text}
+.chin input::placeholder,#chform input::placeholder{color:rgba(246,239,233,.32)}
+.chin input:focus,#chform input:focus{outline:none;
+border-color:rgba(246,239,233,.4);background:rgba(255,255,255,.08)}
+.chin input[disabled]{opacity:.5}
+.chbtn{flex:none;font:inherit;font-size:1.6vh;font-weight:600;padding:.9vh 1.8vh;
+border-radius:1vh;border:0;cursor:pointer;background:#e5484d;color:#fff;
+transition:background .13s ease,opacity .13s ease}
+.chbtn:hover{background:#f2565b}
+.chbtn.soft{background:rgba(255,255,255,.08);color:#f6efe9}
+.chbtn.soft:hover{background:rgba(255,255,255,.14)}
+.chbtn[disabled]{opacity:.35;cursor:default}
+.chmore{display:flex;gap:2.2vh;padding:1vh 1.6vh 0;font-size:1.35vh}
+.chmore span{cursor:pointer;color:rgba(246,239,233,.42);transition:color .12s ease}
+.chmore span:hover{color:#f6efe9}
+.chmore .arm{color:#ff9d8a}
+#chaddv{padding:1.4vh 1.6vh .4vh}
+#chform{display:flex;flex-direction:column;gap:1.2vh}
+#chform[hidden]{display:none}
+.chbtns{display:flex;gap:1vh}
+.chbtns .chbtn{flex:1}
+#chpaste{display:flex;gap:1vh}
+#chpaste[hidden]{display:none}
+.chhelp{font-size:1.4vh;line-height:1.55;color:rgba(246,239,233,.42)}
+#chstat{padding:1.2vh 0;font-size:1.55vh;line-height:1.55;
+color:rgba(246,239,233,.6);min-height:2vh}
+#chstat.ok{color:#68d391}
+#chstat.bad{color:#ff9d8a}
+#chstat .acts{display:flex;gap:1vh;margin-top:1.2vh}
+
 /* ---- easter egg: tomato clicker -------------------------------------------
    Its own layer above the stage, so the break -> break-over crossfade can
    happen underneath a game in progress without disturbing it. */
@@ -370,9 +487,9 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
 <div id="tip"></div>
 <div id="hint">Still playing something? Press <kbd>F8</kbd></div>
 <!-- The break menu. Only on screen during a break, and only for the tools the
-     watcher said are actually installed and switched on. The two marks below
-     are drawn here rather than loaded: this page has no network, and an icon
-     is the one thing a break screen may not be waiting on. -->
+     watcher said are actually installed and switched on. The marks below are
+     drawn here rather than loaded: this page has no network, and an icon is
+     the one thing a break screen may not be waiting on. -->
 <svg style="display:none" aria-hidden="true">
   <symbol id="i-spotify" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="12" fill="#1db954"/>
@@ -392,6 +509,12 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
       <rect x="10.2" y="10.5" width="8.6" height="1.8" rx=".9" fill="#d3d3d8"/>
       <rect x="10.2" y="15.7" width="6.2" height="1.8" rx=".9" fill="#d3d3d8"/>
     </g>
+  </symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24">
+    <rect width="24" height="24" rx="5.4" fill="#e5484d"/>
+    <path d="M12 5.6c-4.1 0-7.2 2.6-7.2 5.8 0 1.9 1.1 3.5 2.8 4.6l-.6 2.6
+      3.1-1.7c.6.1 1.2.2 1.9.2 4.1 0 7.2-2.6 7.2-5.7S16.1 5.6 12 5.6z"
+      fill="#fff"/>
   </symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none"
     stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
@@ -417,15 +540,20 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
     d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor"
     stroke-width="2" stroke-linecap="round"/></symbol>
 </svg>
-<div id="burger" title="Break menu"><span></span><span></span><span></span></div>
+<div id="burger" title="Break menu"><span></span><span></span><span></span><i class="bdot"></i></div>
 <div id="menu">
   <div id="mhome" class="mview">
-    <div class="mrow" data-go="sp">
+    <div class="mrow" data-go="sp" data-feat="spotify">
       <svg class="glyph"><use href="#i-spotify"/></svg><span>Spotify</span>
       <span class="chev"><svg><use href="#i-chev"/></svg></span>
     </div>
-    <div class="mrow" data-go="note">
+    <div class="mrow" data-go="note" data-feat="reminders">
       <svg class="glyph"><use href="#i-reminders"/></svg><span>Add Reminder</span>
+      <span class="chev"><svg><use href="#i-chev"/></svg></span>
+    </div>
+    <div class="mrow" data-go="chat" data-feat="chat">
+      <svg class="glyph"><use href="#i-chat"/></svg><span>Messages</span>
+      <span class="mcount" id="mchatn"></span>
       <span class="chev"><svg><use href="#i-chev"/></svg></span>
     </div>
   </div>
@@ -461,6 +589,46 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
     <div class="nfoot"><span class="nlist" id="nlist"></span>
       <button id="nsave" disabled>Save</button></div>
     <div id="nstat"></div>
+  </div>
+  <div id="mchat" class="mview">
+    <div class="mhead">
+      <button class="mback" data-go="home"><svg><use href="#i-back"/></svg></button>
+      <span class="mtitle" id="chtitle">Messages</span>
+      <span class="chsub" id="chsub"></span><span class="mesc">esc</span>
+    </div>
+    <div id="chlistv" class="chv">
+      <div id="chfriends"></div>
+      <div class="chaddrow" data-ch="add"><span class="plus">+</span>Add a friend</div>
+      <div class="chline" id="chlistline"></div>
+    </div>
+    <div id="chconvv" class="chv">
+      <div id="chlog"></div>
+      <div class="chin"><input id="chtext" type="text" maxlength="500"
+        spellcheck="false" autocomplete="off"><button class="chbtn" id="chsend"
+        disabled>Send</button></div>
+      <div class="chmore"><span id="chcopy">Copy their code</span><span
+        id="chforget">Remove</span></div>
+      <div class="chline" id="chconvline"></div>
+    </div>
+    <div id="chaddv" class="chv">
+      <div id="chform">
+        <input id="chname" type="text" maxlength="40" placeholder="Their name"
+          spellcheck="false" autocomplete="off">
+        <div class="chbtns">
+          <button class="chbtn" id="chmake">Make a code</button>
+          <button class="chbtn soft" id="chhave">I have a code</button>
+        </div>
+        <div id="chpaste" hidden>
+          <input id="chcode" type="text" placeholder="Paste their code"
+            spellcheck="false" autocomplete="off">
+          <button class="chbtn" id="chjoin">Add</button>
+        </div>
+        <div class="chhelp">One of you makes a code and sends it to the other
+          on Signal. After that you can write to each other whenever you are
+          both on a break, and at no other time.</div>
+      </div>
+      <div id="chstat"></div>
+    </div>
   </div>
 </div>
 <!-- The easter egg. Hidden until the tomato on the pause screen is clicked. -->
@@ -624,7 +792,8 @@ function paint(){
     ? "🍅".repeat(done)+"·".repeat(cyc-done) : "";
   // Cheaper than it looks: both of these bail immediately unless their own
   // panel is the one on screen.
-  if(M.on){paintSpotify();paintNote();}
+  if(M.on){paintSpotify();paintNote();paintChat();}
+  chatBadge();
 }
 
 function viewFor(s){
@@ -642,6 +811,9 @@ window.ttSetState=function(json){
   // pay for whatever gap came before this cycle existed.
   const firstState=!st;
   st=s;
+  // Present only when the chat file changed, so it is kept rather than read
+  // off every state: absent means "as before", null means "gone".
+  if("chat" in s)chatIngest(s.chat);
   if(firstState){
     const from=G.at;
     G.away=accrue();
@@ -676,11 +848,28 @@ document.addEventListener("keydown",e=>{
         e.preventDefault();menuClose();}
       return;
     }
+    const ae=document.activeElement;
+    if(ae===$("chtext")||ae===$("chname")||ae===$("chcode")){
+      // Enter sends, as in every chat there is; in the add form it moves on
+      // to the code, and from the code it adds. Only Tab gets through as the
+      // menu key: a letter, or a space, is something you type into a message
+      // or a name.
+      if(e.key==="Enter"){
+        e.preventDefault();
+        if(ae===$("chtext"))chatSend();
+        else if(ae===$("chcode"))chatJoin();
+        else if(!$("chpaste").hidden)$("chcode").focus();
+        return;
+      }
+      if(K.menu==="Tab"&&e.key==="Tab"){e.preventDefault();menuClose();}
+      return;
+    }
     if(keyIs(e,K.menu)){e.preventDefault();menuClose();return;}
     if(M.view==="home"){
       const feat=String(st.menu||"");
       if(keyIs(e,K.sp)&&feat.includes("spotify")){e.preventDefault();menuShow("sp");return;}
       if(keyIs(e,K.note)&&feat.includes("reminders")){e.preventDefault();menuShow("note");return;}
+      if(keyIs(e,K.chat)&&feat.includes("chat")){e.preventDefault();menuShow("chat");return;}
     }
     if(e.key==="Enter"||e.key==="Tab")e.preventDefault();
     return;
@@ -701,7 +890,7 @@ document.addEventListener("keydown",e=>{
 });
 
 /* ---- the break menu -------------------------------------------------------
-   Two tools, on their own layer above the stage for the same reason the game
+   Three tools, on their own layer above the stage for the same reason the game
    is: the stage is torn down and rebuilt on every phase change, and a break
    flips to break-over on its own clock while you are looking at it. A panel
    built inside #stage would vanish mid-sentence.
@@ -710,7 +899,8 @@ document.addEventListener("keydown",e=>{
    leaves as a short message to Swift, which turns it into a fixed-name file;
    the watcher is the only thing that turns a file into a running process. The
    page never sees a playlist URI — it is sent names and answers with an
-   index — and the only free text it can produce is the note you type. */
+   index — and never sees a friend's code unless you paste one into it. The
+   free text it can produce is the note you type, a message, and a name. */
 const M={on:false,view:"home",vhold:0,volAt:0,volT:null,plKey:"",
   icon:"",noteBusy:false,noteAt:0};
 const NDRAFT="tt-break-note";
@@ -722,8 +912,8 @@ function mpost(a){
 // The break screen's keys, from settings by way of the watcher and Swift.
 // A letter matches either case; Tab and Space are named.
 function keyset(){
-  const p=String((st&&st.keys)||"Tab,s,n").split(",");
-  return {menu:p[0]||"Tab",sp:p[1]||"s",note:p[2]||"n"};
+  const p=String((st&&st.keys)||"Tab,s,n,m").split(",");
+  return {menu:p[0]||"Tab",sp:p[1]||"s",note:p[2]||"n",chat:p[3]||"m"};
 }
 function keyIs(e,name){
   if(!name)return false;
@@ -736,11 +926,21 @@ function menuAllowed(){
   return !!st&&typeof st.menu==="string"&&st.menu!=="-"&&
          (view==="break"||view==="breakover")&&!busy;
 }
+const MVIEWS={home:"mhome",sp:"msp",note:"mnote",chat:"mchat"};
 function menuShow(which){
   if(M.view==="sp"&&which!=="sp")mpost("sp.close");
-  for(const id of ["mhome","msp","mnote"])$(id).classList.remove("on");
-  $(which==="sp"?"msp":which==="note"?"mnote":"mhome").classList.add("on");
+  for(const k in MVIEWS)$(MVIEWS[k]).classList.remove("on");
+  $(MVIEWS[which]||"mhome").classList.add("on");
   M.view=which;
+  if(which==="home"){
+    // A row for each tool the watcher said works, and none for the others:
+    // a Spotify row that opens onto "can't reach Spotify" is a promise the
+    // break screen then has to take back.
+    const feat=String((st&&st.menu)||"");
+    for(const r of document.querySelectorAll("#mhome [data-feat]"))
+      r.hidden=!feat.includes(r.dataset.feat);
+  }
+  if(which==="chat")chatShow("list");
   if(which==="sp"){M.plKey="";M.icon="";mpost("sp.open");paintSpotify();}
   if(which==="note"){
     noteSync();noteIdle();
@@ -770,15 +970,19 @@ function menuClose(instant){
   noteDraftSave();
   // The note box keeps focus after the panel is gone, and a focused note box
   // swallows every key that is not Enter. Nothing on the break screen would
-  // answer the menu key again until something else was clicked.
-  $("ntext").blur();
+  // answer the menu key again until something else was clicked. The same
+  // goes for the three boxes in Messages.
+  for(const id of ["ntext","chtext","chname","chcode"])$(id).blur();
   M.view="home";
   document.body.classList.remove("menuing");
   const m=$("menu");m.classList.remove("up");
   if(instant)m.classList.remove("on");
   else setTimeout(()=>{if(!M.on)m.classList.remove("on");},200);
 }
-function menuBack(){ if(M.view==="home")menuClose(); else menuShow("home"); }
+function menuBack(){
+  if(M.view==="chat"&&CH.sub!=="list"){chatShow("list");return;}
+  if(M.view==="home")menuClose(); else menuShow("home");
+}
 
 /* ---- Spotify ---- */
 // A playlist has no artwork here: the desktop app's scripting dictionary
@@ -960,6 +1164,250 @@ function paintNote(){
   }
 }
 
+/* ---- messages ----
+   Friends who are on a break at the same moment you are, and nobody else.
+   The chat helper holds the codes and the connections; this panel is sent
+   who your friends are, by an id that is not a secret, which of them are on
+   a break, and what this break's messages have been. It answers with an id
+   and some text. The one secret that can pass through here is a code you
+   paste in yourself, on its way to the helper.
+
+   Nothing is kept. The helper deletes the break's messages when the break
+   ends, and this page is gone by then too. */
+const CH={state:null,ver:0,drawn:"",sub:"list",friend:"",seen:{},run:"",
+  noteQ:-1,pending:[],armed:0,addBusy:0,stick:false,lineT:null};
+
+function chatIngest(c){
+  if(c&&c.run!==CH.run){
+    // A new helper, so a new break's worth of numbering. A note it came up
+    // with is last break's answer, unless this page is waiting on one.
+    CH.run=c.run;CH.seen={};CH.pending=[];
+    CH.noteQ=(c.note&&!CH.addBusy)?c.note.q:-1;
+  }
+  CH.state=c||null;CH.ver++;
+  if(c&&c.note&&c.note.q>CH.noteQ){CH.noteQ=c.note.q;chatNote(c.note);}
+}
+function chatFriend(id){
+  return ((CH.state&&CH.state.friends)||[]).find(f=>f.id===id)||null;
+}
+function chatUnread(id){
+  const s=CH.seen[id]||0;
+  return ((CH.state&&CH.state.log)||[]).filter(m=>!m.me&&m.f===id&&m.q>s).length;
+}
+function chatBadge(){
+  const on=String((st&&st.menu)||"").includes("chat");
+  const n=on?((CH.state&&CH.state.friends)||[]).reduce((a,f)=>a+chatUnread(f.id),0):0;
+  $("burger").classList.toggle("unread",n>0);
+  $("mchatn").textContent=n?String(n):"";
+  $("mchatn").classList.toggle("on",n>0);
+}
+function chatLine(text,cls){
+  const el=$(CH.sub==="conv"?"chconvline":"chlistline");
+  el.textContent=text;el.className="chline"+(cls?" "+cls:"");
+  if(CH.lineT)clearTimeout(CH.lineT);
+  CH.lineT=setTimeout(()=>{CH.lineT=null;
+    for(const id of ["chconvline","chlistline"]){$(id).textContent="";}
+    CH.drawn="";},5000);
+}
+function chatShow(sub,id){
+  CH.sub=sub;
+  if(id!==undefined)CH.friend=id;
+  for(const [k,el] of [["list","chlistv"],["conv","chconvv"],["add","chaddv"]])
+    $(el).classList.toggle("on",k===sub);
+  CH.drawn="";CH.armed=0;
+  $("chforget").textContent="Remove";$("chforget").className="";
+  $("chsub").textContent="";$("chsub").className="chsub";
+  $("chtitle").textContent=sub==="add"?"Add a friend":"Messages";
+  if(sub==="conv"){
+    CH.stick=true;$("chtext").value="";
+    setTimeout(()=>{if(M.on&&M.view==="chat"&&CH.sub==="conv"&&!$("chtext").disabled)
+      $("chtext").focus();},80);
+  }
+  if(sub==="add"){
+    addReset();
+    setTimeout(()=>{if(M.on&&M.view==="chat"&&CH.sub==="add")$("chname").focus();},80);
+  }
+  paintChat();
+}
+function paintChat(){
+  if(!M.on||M.view!=="chat")return;
+  // Messages of ours that the helper has now logged, or that never will be.
+  const log=(CH.state&&CH.state.log)||[],now=Date.now();
+  const before=CH.pending.length;
+  CH.pending=CH.pending.filter(p=>now-p.at<15000&&
+    !log.some(m=>m.me&&m.f===p.f&&m.x===p.x&&m.q>p.q0));
+  if(CH.armed&&now-CH.armed>4000){
+    CH.armed=0;$("chforget").textContent="Remove";$("chforget").className="";
+  }
+  if(CH.addBusy&&now-CH.addBusy>10000){
+    CH.addBusy=0;
+    addStat("No answer from the chat helper. Try again in a moment","bad");
+  }
+  // Redrawn when something changed, not four times a second: a rebuilt list
+  // jumps its scroll position out from under a click.
+  const key=CH.ver+":"+CH.sub+":"+CH.friend+":"+CH.pending.length+":"+before;
+  if(key===CH.drawn)return;
+  CH.drawn=key;
+  if(CH.sub==="list")drawFriends();
+  else if(CH.sub==="conv")drawConv();
+}
+function chatAvatar(name){
+  const d=document.createElement("span");
+  d.className="chav";
+  d.style.background="hsl("+plHue(name)+",42%,38%)";
+  d.textContent=(Array.from(name)[0]||"?").toUpperCase();
+  d.appendChild(document.createElement("i"));
+  return d;
+}
+function drawFriends(){
+  const c=CH.state,box=$("chfriends");
+  box.textContent="";
+  const empty=t=>{const e=document.createElement("div");e.className="chempty";
+    e.textContent=t;box.appendChild(e);};
+  if(!c){empty("Connecting…");return;}
+  const fr=(c.friends||[]).slice().sort((a,b)=>(b.on?1:0)-(a.on?1:0));
+  if(!fr.length)empty("No friends yet. One of you makes a code and sends it "+
+    "to the other on Signal.");
+  for(const f of fr){
+    const row=document.createElement("div");
+    row.className="chf"+(f.on?" on":"");
+    row.dataset.fr=f.id;
+    const t=document.createElement("span");t.className="chft";
+    const b=document.createElement("b");b.textContent=f.n;   // never innerHTML
+    const s=document.createElement("span");
+    s.textContent=f.on?"on a break":"not on a break";
+    t.appendChild(b);t.appendChild(s);
+    row.appendChild(chatAvatar(f.n));row.appendChild(t);
+    const n=chatUnread(f.id);
+    if(n){const k=document.createElement("span");k.className="chn";
+      k.textContent=String(n);row.appendChild(k);}
+    const ch=document.createElement("span");ch.className="chev";
+    ch.innerHTML='<svg><use href="#i-chev"/></svg>';   // a fixed string of ours
+    row.appendChild(ch);
+    box.appendChild(row);
+  }
+  if(!c.relay.ok&&!CH.lineT){
+    $("chlistline").textContent="Can’t reach the relay: "+c.relay.x;
+    $("chlistline").className="chline bad";
+  }else if(c.relay.ok&&!CH.lineT){
+    $("chlistline").textContent="";$("chlistline").className="chline";
+  }
+}
+function bubble(box,text,cls,meta){
+  const d=document.createElement("div");
+  d.className="chb "+cls;
+  d.textContent=text;                 // written on another machine: text only
+  box.appendChild(d);
+  if(meta){const m=document.createElement("div");m.className="chmeta";
+    m.textContent=meta;box.appendChild(m);}
+}
+function drawConv(){
+  const f=chatFriend(CH.friend);
+  if(!f){chatShow("list");return;}  // removed, or the helper went away
+  $("chtitle").textContent=f.n;
+  $("chsub").textContent=f.on?"on a break":"not on a break";
+  $("chsub").className="chsub"+(f.on?" on":"");
+  const box=$("chlog");
+  const atEnd=box.scrollHeight-box.scrollTop-box.clientHeight<40;
+  const log=((CH.state&&CH.state.log)||[]).filter(m=>m.f===f.id);
+  const mine=CH.pending.filter(p=>p.f===f.id);
+  box.textContent="";
+  if(!log.length&&!mine.length){
+    const e=document.createElement("div");e.className="chnone";
+    e.textContent=f.on
+      ? f.n+" is on a break too. Nothing said here is kept after it."
+      : f.n+" isn’t on a break. When you both are, you can write here.";
+    box.appendChild(e);
+  }
+  for(const m of log){
+    if(m.me)bubble(box,m.x,"me"+(m.s==="sending"?" wait":m.s==="failed"?" fail":""),
+                   m.s==="failed"?"Not sent":"");
+    else bubble(box,m.x,"them");
+    if(!m.me)CH.seen[f.id]=Math.max(CH.seen[f.id]||0,m.q);
+  }
+  for(const p of mine)bubble(box,p.x,"me wait");
+  const t=$("chtext");
+  t.disabled=!f.on;
+  t.placeholder=f.on?"Message "+f.n:f.n+" isn’t on a break";
+  $("chsend").disabled=!f.on||!t.value.trim();
+  if(atEnd||CH.stick){box.scrollTop=box.scrollHeight;CH.stick=false;}
+}
+function chatSend(){
+  const f=chatFriend(CH.friend),t=$("chtext").value.trim();
+  if(!f||!f.on||!t)return;
+  const q0=((CH.state&&CH.state.log)||[]).reduce((a,m)=>Math.max(a,m.q),0);
+  CH.pending.push({f:f.id,x:t,q0,at:Date.now()});
+  mpost("chat.send."+f.id+"."+t);
+  $("chtext").value="";$("chsend").disabled=true;
+  CH.stick=true;CH.drawn="";paintChat();
+}
+function chatNote(n){
+  if(n.k==="invited"){
+    CH.addBusy=0;
+    if(CH.sub!=="add")return;
+    $("chform").hidden=true;
+    addStat(n.n+"’s code is on your clipboard. Paste it to "+n.n+
+      " on Signal. The code is the whole friendship, so send it nowhere else.","ok",
+      [["Copy again",()=>mpost("chat.copy."+n.id)],["Done",()=>chatShow("list")]]);
+  }else if(n.k==="joined"){
+    CH.addBusy=0;
+    chatShow("list");
+    chatLine(n.n+" added. You will see them here when you are both on a break.","ok");
+  }else if(n.k==="bad"){
+    CH.addBusy=0;
+    addStat(n.x,"bad");
+  }else if(n.k==="copied"){
+    if(CH.sub==="conv")chatLine("Code copied. Send it on Signal, and nowhere else.","ok");
+  }else if(n.k==="forgot"){
+    if(CH.sub!=="list")chatShow("list");
+    chatLine(n.x+" removed.","");
+  }else if(n.k==="error"){
+    chatLine(n.x,"bad");
+  }
+}
+function addReset(){
+  CH.addBusy=0;
+  $("chform").hidden=false;$("chpaste").hidden=true;
+  $("chname").value="";$("chcode").value="";
+  addStat("","");
+}
+function addStat(text,cls,acts){
+  const el=$("chstat");
+  el.className=cls||"";el.textContent=text;
+  if(acts&&acts.length){
+    const row=document.createElement("div");row.className="acts";
+    for(const [label,fn] of acts){
+      const b=document.createElement("button");
+      b.className="chbtn"+(row.childNodes.length?"":" soft");
+      b.textContent=label;b.addEventListener("click",fn);
+      row.appendChild(b);
+    }
+    el.appendChild(row);
+  }
+}
+function addName(){
+  const n=$("chname").value.trim();
+  if(!n){addStat("Give them a name first","bad");$("chname").focus();}
+  return n;
+}
+function chatInvite(){
+  const n=addName();
+  if(!n||CH.addBusy)return;
+  CH.addBusy=Date.now();
+  addStat("Making a code…","");
+  mpost("chat.invite."+n);
+}
+function chatJoin(){
+  const n=addName();
+  if(!n||CH.addBusy)return;
+  // Whatever was pasted around it — "here's my code: tt1-…." — is left behind.
+  const m=/tt1-[A-Za-z0-9_-]+/.exec($("chcode").value);
+  if(!m){addStat("That doesn’t look like a code. A code starts with tt1-","bad");return;}
+  CH.addBusy=Date.now();
+  addStat("Adding "+n+"…","");
+  mpost("chat.join."+m[0]+"."+n);
+}
+
 /* ---- wiring ---- */
 $("burger").addEventListener("click",()=>{M.on?menuClose():menuOpen();});
 // A click anywhere that is not the menu closes it. The stage underneath has
@@ -973,6 +1421,9 @@ document.addEventListener("click",e=>{
 $("menu").addEventListener("click",e=>{
   const go=e.target.closest("[data-go]");
   if(go){ go.dataset.go==="home"?menuBack():menuShow(go.dataset.go); return; }
+  const fr=e.target.closest("[data-fr]");
+  if(fr){chatShow("conv",fr.dataset.fr);return;}
+  if(e.target.closest("[data-ch]")){chatShow("add");return;}
   const pl=e.target.closest("[data-pl]");
   if(pl){
     // Say so now. Starting a playlist is a launch when Spotify is closed,
@@ -1008,6 +1459,27 @@ $("vol").addEventListener("input",()=>{
   else M.volT=setTimeout(()=>{M.volT=null;volSend(v);},160);
 });
 $("ntext").addEventListener("input",()=>{noteSync();noteDraftSave();});
+$("chtext").addEventListener("input",()=>{
+  const f=chatFriend(CH.friend);
+  $("chsend").disabled=!f||!f.on||!$("chtext").value.trim();
+});
+$("chsend").addEventListener("click",chatSend);
+$("chmake").addEventListener("click",chatInvite);
+$("chhave").addEventListener("click",()=>{
+  $("chpaste").hidden=false;addStat("","");$("chcode").focus();
+});
+$("chjoin").addEventListener("click",chatJoin);
+$("chcopy").addEventListener("click",()=>mpost("chat.copy."+CH.friend));
+$("chforget").addEventListener("click",()=>{
+  // Twice, because it cannot be taken back from here: the code is gone from
+  // this Mac, and only a new one, sent on Signal again, makes a friend again.
+  const f=chatFriend(CH.friend);
+  if(!f)return;
+  if(CH.armed){CH.armed=0;mpost("chat.forget."+f.id);return;}
+  CH.armed=Date.now();
+  $("chforget").textContent="Remove "+f.n+"? Click again";
+  $("chforget").className="arm";
+});
 $("nsave").addEventListener("click",noteSave);
 noteDraftLoad();
 
@@ -1499,6 +1971,22 @@ ticker=setInterval(paint,250);
     window.ttSetState(Object.assign({},demo.break,menu));
     menuOpen();
     if(m[1]!=="menu")menuShow(m[1]==="spotify"?"sp":"note");
+    return;
+  }
+  // #demo=chat, #demo=chatconv, #demo=chatadd: Messages with two friends,
+  // one of them on a break and mid-conversation.
+  if(m[1].startsWith("chat")){
+    const chat={run:"demo",relay:{ok:true,x:""},note:null,
+      friends:[{id:"e5f6a7b8",n:"Ola",on:false},{id:"a1b2c3d4",n:"Kari",on:true}],
+      log:[{q:1,f:"a1b2c3d4",me:false,x:"Pause nå? 🍅",t:now-90,s:""},
+           {q:2,f:"a1b2c3d4",me:true,x:"Ja! Fem minutter, så tilbake til TDT4100",t:now-80,s:"sent"},
+           {q:3,f:"a1b2c3d4",me:false,x:"Samme her. Hvordan går øvingen?",t:now-30,s:""}]};
+    window.ttSetState(Object.assign({},demo.break,menu,
+      {menu:"spotify,reminders,chat",chat}));
+    menuOpen();
+    if(m[1]!=="menu")menuShow("chat");
+    if(m[1]==="chatconv")chatShow("conv","a1b2c3d4");
+    if(m[1]==="chatadd")chatShow("add");
     return;
   }
   if(demo[m[1]])window.ttSetState(demo[m[1]]);

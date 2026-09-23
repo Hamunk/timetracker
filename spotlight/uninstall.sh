@@ -15,8 +15,9 @@ if [[ -f "$DATA_DIR/pomodoro" ]]; then
     IFS=$'\t' read -r _ _ _ _ _ _ wpid < "$DATA_DIR/pomodoro" 2>/dev/null || true
     [[ "${wpid:-}" =~ ^[0-9]+$ ]] && kill "$wpid" 2>/dev/null
 fi
-# The overlay and the Spotify agent each leave a pid behind; use it.
-for PIDFILE in "$DATA_DIR/.tomato-overlay.pid" "$DATA_DIR/.tomato-spotify.pid"; do
+# The overlay, the Spotify agent and the chat each leave a pid behind; use it.
+for PIDFILE in "$DATA_DIR/.tomato-overlay.pid" "$DATA_DIR/.tomato-spotify.pid" \
+               "$DATA_DIR/.tomato-chat.pid"; do
     read -r p < "$PIDFILE" 2>/dev/null || continue
     [[ "$p" =~ ^[0-9]+$ ]] && kill "$p" 2>/dev/null
 done
@@ -30,6 +31,8 @@ re_quote() { printf '%s' "$1" | sed 's#[][^$.*+?(){}|\\]#\\&#g'; }
 pkill -f "^$(re_quote "$BIN_DIR")/(pomodoro-watch|spotify)\.sh" 2>/dev/null
 pkill -f "^$(re_quote "$APPS_DIR")/TimeTracker Prompt\.app/Contents/MacOS/ttprompt overlay" \
     2>/dev/null
+pkill -f "^$(re_quote "$APPS_DIR")/TimeTracker Chat\.app/Contents/MacOS/ttchat break" \
+    2>/dev/null
 rm -f "$DATA_DIR/pomodoro" "$DATA_DIR/.tomato-choice" "$DATA_DIR/.tomato-alive" \
       "$DATA_DIR/.prompt-answer" "$DATA_DIR/.tomato-audio" \
       "$DATA_DIR/.tomato-overlay.pid" \
@@ -39,6 +42,8 @@ rm -f "$DATA_DIR/pomodoro" "$DATA_DIR/.tomato-choice" "$DATA_DIR/.tomato-alive" 
       "$DATA_DIR/.tomato-spotify-played" \
       "$DATA_DIR/.tomato-reminder" "$DATA_DIR/.tomato-reminder-result" \
       "$DATA_DIR/.tomato-reminder-busy" \
+      "$DATA_DIR/.tomato-chat" "$DATA_DIR/.tomato-chat-cmd" \
+      "$DATA_DIR/.tomato-chat.pid" "$DATA_DIR/.tomato-chat.lock" \
       "$DATA_DIR/.paint-request.tsv" "$DATA_DIR/.paint-result.tsv" \
       "$DATA_DIR/.paint-calendars.tsv"
 rm -rf "$DATA_DIR/.paint.lock"
@@ -78,6 +83,10 @@ if [[ "${1:-}" == "--purge-data" ]]; then
     printf 'Purged data dir %s\n' "$DATA_DIR"
 else
     printf 'Kept your logs in %s (pass --purge-data to delete them)\n' "$DATA_DIR"
+    # Said out loud because it is the one kept file that is a secret: each
+    # code in it is a friendship, readable by whoever holds a copy.
+    [[ -f "$DATA_DIR/friends.tsv" ]] && \
+        printf 'Kept friends.tsv there too. It holds your friends'"'"' codes.\n'
 fi
 
 # Two permissions outlive the apps that used them, and macOS keeps them listed

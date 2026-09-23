@@ -7,6 +7,8 @@
 #   ./dev.sh status         what is installed and what is running, both sides
 #   ./dev.sh seed           copy your categories — never your log — into it
 #   ./dev.sh env            the four exports, for `eval "$(./dev.sh env)"`
+#   ./dev.sh relay          the stand-in for ntfy.sh that scratch Messages uses
+#   ./dev.sh friend <code>  a friend on a break, in this terminal, via that relay
 #   ./dev.sh install-real   install this tree to the real side, if nothing is live
 #
 # Four things have to be separate before two installs can coexist, and three
@@ -37,6 +39,7 @@ export TIMETRACK_VERB="devtime"
 
 PROD_DIR="$HOME/.timetrack"
 PROD_APPS="$HOME/Applications/TimeTracker"
+DEV_RELAY="http://127.0.0.1:47800"
 
 # Three things no environment variable can separate, because they do not live
 # on this machine's filesystem: your Spotify player, your Reminders lists, and
@@ -48,6 +51,13 @@ PROD_APPS="$HOME/Applications/TimeTracker"
 #
 # The durations are the minimum the settings table allows, so a full cycle —
 # work, break, long break — runs in well under a minute instead of an hour.
+#
+# Messages is the exception: on, because it can be made safe to have on. The
+# relay is the fourth shared thing — ntfy.sh counts 250 messages a day against
+# this machine's address, the same count the real install chats against — and
+# unlike the other three it has a stand-in. write_dev_relay points the scratch
+# install at chat-relay.py on this machine, so a test break spends nothing and
+# reaches nobody. Its friends are its own: seed never copies friends.tsv.
 write_dev_settings() {
     cat > "$TIMETRACK_DIR/settings.tsv" <<'TSV'
 pomodoro_minutes	0.2
@@ -61,7 +71,15 @@ pause_media	off
 spotify	off
 reminders	off
 paint_calendar	off
+chat	on
 TSV
+}
+
+# Written on every install and every seed, not only the first: pointing the
+# scratch install at ntfy.sh for one test is allowed, and forgetting to point
+# it back is exactly the mistake a reinstall should undo.
+write_dev_relay() {
+    printf '%s\n' "$DEV_RELAY" > "$TIMETRACK_DIR/chat-relay"
 }
 
 cmd_seed() {
@@ -81,17 +99,38 @@ cmd_seed() {
         printf 'start_iso\tend_iso\tduration_sec\tcategory\tnote\tplan\trecap\tpomodoros\tbreak_overrun_sec\n' \
             > "$TIMETRACK_DIR/sessions.tsv"
     write_dev_settings
+    write_dev_relay
     printf 'Wrote fast, quiet scratch settings.\n'
 }
 
 cmd_install() {
     [[ -d "$TIMETRACK_DIR" ]] || cmd_seed
     [[ -f "$TIMETRACK_DIR/settings.tsv" ]] || write_dev_settings
+    write_dev_relay
     "$ROOT/spotlight/install.sh"
 }
 
 cmd_remove() {
     "$ROOT/spotlight/uninstall.sh" "${1:-}"
+}
+
+# In the foreground, so it ends when the terminal does and is never left
+# running behind anybody's back. Loopback only, and it stores nothing.
+cmd_relay() {
+    printf 'Stand-in relay for scratch Messages on %s. Ctrl-C to stop.\n' "$DEV_RELAY"
+    exec /usr/bin/python3 "$ROOT/spotlight/chat-relay.py" "${DEV_RELAY##*:}"
+}
+
+# The other end of a friendship, for whoever has no second Mac and no friend
+# on a break: make a code on the scratch break screen, paste it here, and this
+# terminal is that friend — on a break, answering, until you close it. Each
+# line you type is sent; what arrives is printed. It uses the scratch
+# install's own helper and the stand-in relay, never ntfy.sh.
+cmd_friend() {
+    local bin="$TIMETRACK_APPS_DIR/TimeTracker Chat.app/Contents/MacOS/ttchat"
+    [[ -n "${1:-}" ]] || { printf 'usage: ./dev.sh friend <code>\n'; return 2; }
+    [[ -x "$bin" ]] || { printf 'No scratch install. ./dev.sh install first.\n'; return 1; }
+    exec "$bin" peer "$DEV_RELAY" "$1"
 }
 
 # The one path from this script to the real install, named for what it does.
@@ -144,6 +183,8 @@ running() {
     pgrep -f "^$(q "$apps")/TimeTracker Prompt\.app/Contents/MacOS/ttprompt overlay" \
         >/dev/null 2>&1 && printf ' overlay'
     pgrep -f "^/usr/bin/python3 $(q "$bin")/dashboard\.py" >/dev/null 2>&1 && printf ' dashboard'
+    pgrep -f "^$(q "$apps")/TimeTracker Chat\.app/Contents/MacOS/ttchat break" \
+        >/dev/null 2>&1 && printf ' chat'
     return 0
 }
 
@@ -180,5 +221,7 @@ case "${1:-status}" in
     seed)         cmd_seed ;;
     status)       cmd_status ;;
     env)          cmd_env ;;
-    *) sed -n '2,11p' "$0"; exit 2 ;;
+    relay)        cmd_relay ;;
+    friend)       cmd_friend "${2:-}" ;;
+    *) sed -n '2,13p' "$0"; exit 2 ;;
 esac

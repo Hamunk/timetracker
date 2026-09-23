@@ -53,6 +53,12 @@ tt_setting_spec() {
         # row — they hang off the break, they are not part of it.
         spotify)            TT_DEF=on ;;
         reminders)          TT_DEF=on ;;
+        # The third tool, and the only one off until you say otherwise: it is
+        # the one thing in TimeTracker that talks to the internet. On, every
+        # break connects to the relay for each friend you have paired, so that
+        # friends on a break at the same moment can see you and write to you.
+        # With no friends it connects to nothing. See SECURITY.md, "Break chat".
+        chat)               TT_DEF=off ;;
         # What happens to the music when you press "I'm back". On: the work
         # playlist (the one marked `work` in spotify-playlists.tsv) starts and
         # the break's music is gone. Off: Spotify is paused instead, which is
@@ -71,6 +77,7 @@ tt_setting_spec() {
         key_menu)           TT_DEF=Tab TT_KEY=1 ;;
         key_spotify)        TT_DEF=s   TT_KEY=1 ;;
         key_reminder)       TT_DEF=n   TT_KEY=1 ;;
+        key_chat)           TT_DEF=m   TT_KEY=1 ;;
         # Painting the log onto a calendar. On by itself does nothing: the
         # calendar to paint into is named in its own file (free text, so not
         # table material), and without one every paint says so and stops.
@@ -89,9 +96,9 @@ tt_setting_spec() {
 tt_setting_keys() {
     printf '%s\n' pomodoro_minutes break_minutes long_break_minutes \
         long_break_every snooze_minutes auto_accept_seconds pomodoro_default \
-        sound pause_media key_menu key_spotify key_reminder \
+        sound pause_media key_menu key_spotify key_reminder key_chat \
         easter_egg spotify spotify_resume_work spotify_pause_on_overrun \
-        reminders paint_calendar paint_days paint_min_minutes
+        reminders chat paint_calendar paint_days paint_min_minutes
 }
 
 tt_setting_valid() {

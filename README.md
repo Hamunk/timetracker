@@ -45,7 +45,7 @@ Open the launcher, type, press Enter.
 | `time <key, name or keyword>` | start that category, or switch to it |
 | `time new` | create a category |
 | `time dashboard` | totals and recent sessions, in your browser |
-| `time settings` | durations, keys, Spotify, Reminders, calendar, categories |
+| `time settings` | durations, keys, Spotify, Reminders, Messages, calendar, categories |
 | `time guide` | how everything works |
 | `time categories` | edit names and keywords in a text editor |
 | `time data` | open the data folder |
@@ -82,16 +82,29 @@ a work session ends, a tomato takes the whole screen. Music and video that
 can be reached are paused. The break ends when you say so, and time past the
 scheduled end is logged as overrun on the session.
 
-The break screen has a menu with two tools: a Spotify remote for your break
-playlists, and a note box that saves into Apple Reminders. Neither can start a
-cycle, end a break, or write to the log.
+The break screen has a menu with three tools: a Spotify remote for your break
+playlists, a note box that saves into Apple Reminders, and Messages. None of
+them can start a cycle, end a break, or write to the log.
+
+## Messages
+
+Friends who are on a break at the same moment can write to each other from
+the break menu, and at no other time. To add a friend, one of you chooses
+*Make a code* and sends the code on Signal; the other chooses *I have a code*
+and pastes it. The code is the whole friendship. There is no account.
+
+Messages travel through [ntfy.sh](https://ntfy.sh), a public relay, sealed
+before they leave your Mac. The relay stores none of them and cannot read
+them, and nothing is kept after the break. It does see your IP address and
+when you are on a break. Off by default; with it off, nothing here talks to
+the internet.
 
 ## Settings
 
 `time settings`, or `~/.timetrack/settings.tsv`: `key<TAB>value`, one per
 line. A missing file means every default; a value out of range reads as its
 default. The settings page groups them: timer, break screen, Spotify,
-Reminders, calendar, categories.
+Reminders, Messages, calendar, categories.
 
 The two short durations accept decimals, so a whole cycle can be tried in
 seconds.
@@ -113,9 +126,13 @@ is text.
 | `paint-calendar` | the calendar to write sessions to; absent means none |
 | `reminders-list` | the list break notes go to |
 | `spotify-playlists.tsv` | break playlists, and the one kept for work |
+| `friends.tsv` | your friends and their codes; the one secret here |
+| `chat-relay` | the relay Messages uses, if not ntfy.sh |
 
 Every write goes through `action.sh`, which takes a lock and validates. The
-dashboard has no other path to the log.
+dashboard has no other path to the log. `friends.tsv` is the exception, and
+has one writer of its own: the chat helper, the only program that reads a
+code.
 
 ## Calendar
 
@@ -142,7 +159,9 @@ the bundles it generates.
 
 `categories.tsv` is data you may edit, and it never runs as code. The
 dashboard listens only on this computer, only while open, with a per-run
-token. `SECURITY.md` has the full review.
+token. Messages, when on, is the one part that talks to the internet: only
+during a break, only by connecting out, and only in sealed messages.
+`SECURITY.md` has the full review.
 
 The log is a record of your hours. It is kept locally and sent nowhere.
 
