@@ -108,6 +108,36 @@ let keys = a.count > 7 ? a[7] : "Tab,s,n,m"
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
+// Cmd-V, Cmd-C, Cmd-X, Cmd-A and Cmd-Z do not belong to the text field they
+// seem to act on. AppKit finds them as the key equivalents of Edit menu items
+// and sends the item's action down the responder chain to whatever has focus.
+// An accessory app has no menu bar, and so by default no Edit menu: pasting a
+// friend's code into the break screen did nothing at all, and the plan prompt
+// would not take a paste either. This menu is never drawn. It exists to be
+// searched for those five keys.
+func editMenu() {
+    let edit = NSMenu(title: "Edit")
+    let items: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+        ("Undo", Selector(("undo:")), "z", [.command]),
+        ("Redo", Selector(("redo:")), "z", [.command, .shift]),
+        ("Cut", #selector(NSText.cut(_:)), "x", [.command]),
+        ("Copy", #selector(NSText.copy(_:)), "c", [.command]),
+        ("Paste", #selector(NSText.paste(_:)), "v", [.command]),
+        ("Select All", #selector(NSText.selectAll(_:)), "a", [.command]),
+    ]
+    for (title, action, key, mods) in items {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = mods
+        edit.addItem(item)
+    }
+    let holder = NSMenuItem()
+    holder.submenu = edit
+    let bar = NSMenu()
+    bar.addItem(holder)
+    app.mainMenu = bar
+}
+editMenu()
+
 final class P: NSPanel { override var canBecomeKey: Bool { true } }
 
 final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
