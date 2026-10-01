@@ -41,6 +41,11 @@
 
 set -uo pipefail
 
+BIN_DIR="${0%/*}"
+case "$BIN_DIR" in
+    /*) ;;
+    *) BIN_DIR="$(cd "$BIN_DIR" && pwd)" ;;
+esac
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 WANT_FILE="$DATA_DIR/.tomato-spotify-want"
 CMD_FILE="$DATA_DIR/.tomato-spotify-cmd"
@@ -56,7 +61,7 @@ PLAYED_FILE="$DATA_DIR/.tomato-spotify-played"
 MEDIA_STOP="$DATA_DIR/.media-stop"
 POMO_FILE="$DATA_DIR/pomodoro"
 
-IDLE_MAX=3      # ticks with no want file before giving up
+IDLE_MAX=3      # ticks with nothing to do, outside a break, before giving up
 GUARD=10800     # 3h backstop: no agent outlives a plausible break
 
 # --- one agent at a time -----------------------------------------------------
@@ -195,12 +200,24 @@ play_uri() {
     # again. A paused lecture starting up under a break is the report that
     # led here. Launched hidden, no window appears and nothing underneath
     # the overlay changes.
+    #
+    # Launched hidden was not the whole of it: the report came back, a paused
+    # video starting up as a cold Spotify did. Whatever wakes it — the launch,
+    # a headset taking the new audio route and sending "play", the browser —
+    # it wakes before Spotify plays, so between the two the video is what
+    # Now Playing means, and a Now Playing pause (ttpause) reaches it, a
+    # Canvas player included. You chose music; anything else that started in
+    # that moment was not chosen. Not with Spotify already open, where none
+    # of this was seen, and where Spotify would be what got paused.
     if ! running; then
         /usr/bin/open -g -j -a Spotify >/dev/null 2>&1 || return 0
         local t=0
         while ! running && (( t < 80 )); do sleep 0.1; t=$(( t + 1 )); done
         running || return 0
         sleep 1     # scriptable a beat after the process exists
+        if [[ -x "$BIN_DIR/ttpause" ]]; then
+            "$BIN_DIR/ttpause" >/dev/null 2>&1
+        fi
     fi
     osa 8 'on run argv
     tell application "Spotify"
@@ -333,6 +350,8 @@ while :; do
 
     # The cycle is over, or was cancelled: nothing left to serve.
     [[ -f "$POMO_FILE" ]] || break
+    phase=""
+    IFS=$'\t' read -r phase _ < "$POMO_FILE" 2>/dev/null || true
 
     if [[ -f "$WANT_FILE" ]]; then
         # Answer before sleeping, not after: the panel is on screen from the
@@ -340,20 +359,27 @@ while :; do
         # later is a second of "connecting" nobody needs to see.
         idle=0
         poll
+    elif [[ "$phase" == "BREAK" ]]; then
+        # Waiting for the panel. The watcher starts this as the break starts,
+        # so that opening the panel finds it already running: launching it
+        # then — up to two seconds of the watcher noticing, and a
+        # LaunchServices launch on top — was most of the lag the panel was
+        # reported for. Waiting costs a file test ten times a second, and
+        # Spotify is not asked anything until somebody looks.
+        idle=0
     else
-        # Not wanted. Linger a couple of ticks rather than exiting instantly:
-        # closing and reopening the panel is one click, and paying a fresh
-        # LaunchServices launch for it would show an empty panel each time.
+        # Not wanted, and the break is over. Linger a couple of ticks: the
+        # last command of a break, "I'm back" putting the work playlist on,
+        # is issued as the break ends.
         idle=$(( idle + 1 ))
         (( idle > IDLE_MAX )) && break
     fi
 
-    # One state poll per second, but the command file is checked ten times
-    # in that second: a click has to feel immediate, and asking Spotify for
-    # its state is the expensive half of a tick. It was four; a quarter
-    # second between a click and anything happening was the lag the panel
-    # was reported for.
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
+    # Twice a second for the state, and ten times for a command: a click has
+    # to feel immediate, and asking Spotify for its state is the expensive
+    # half of a tick. It was once a second, and a track change took that long
+    # to reach the panel.
+    for _ in 1 2 3 4 5; do
         if take_command; then
             # Something changed; report it without waiting for the next tick.
             poll

@@ -100,6 +100,7 @@ hushed=0
 silent=0
 last_audio=0
 last_menu=0
+menu_feat="-"     # what the overlay was told it may offer, at its launch
 # When the phase now under way began: what a friend is told it has been
 # running since. The pomodoro file keeps only where the phase will end.
 phase_at=$seg
@@ -181,9 +182,10 @@ launch_overlay() {
     # Seed the heartbeat so the grace period starts now, not at the helper's
     # first tick — otherwise the next pass would judge a fresh overlay stale.
     : > "$ALIVE_FILE"
+    menu_feat=$(menu_features)
     "$HELPER_BIN" overlay "$CHOICE_FILE" "$(tt_setting long_break_every)" \
         "$(tt_setting auto_accept_seconds)" "$(tt_setting easter_egg)" \
-        "$(menu_features)" \
+        "$menu_feat" \
         "$(tt_setting key_menu),$(tt_setting key_spotify),$(tt_setting key_reminder),$(tt_setting key_chat)" \
         >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$OVERLAY_PID"
@@ -568,7 +570,13 @@ while :; do
         reminder_send
         if (( now - last_menu >= 2 )); then
             last_menu=$now
-            if [[ -f "$SPOT_WANT" || -f "$SPOT_CMD" ]]; then spotify_agent; fi
+            # Wanted, or about to be: on a break with Spotify in the menu the
+            # remote is started before anyone opens it, so that opening it
+            # finds it already listening (spotify.sh says why).
+            if [[ -f "$SPOT_WANT" || -f "$SPOT_CMD" ]] \
+               || [[ "$phase" == "BREAK" && "$menu_feat" == *spotify* ]]; then
+                spotify_agent
+            fi
             # The tomato is on screen before the break is: a chat that came
             # up at the tomato would tell your friends you were on a break
             # while you were still deciding whether to take one.
