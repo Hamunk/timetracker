@@ -50,14 +50,46 @@ say() { [[ "$mode" == "--quiet" ]] || printf '%s\n' "$1"; }
 
 [[ -d "$HELPER" ]] || { say "Calendar helper not installed. Re-run install.sh"; exit 1; }
 
-# --- listing -----------------------------------------------------------------
-# No request file, so the helper dumps what it can see and touches nothing.
-# This is also the launch that raises the permission prompt, which is why it
-# is worth having as a Spotlight verb.
+# The detached call after every session close has nothing to do with painting
+# off, and must not take the lock below to find that out.
+if [[ "$mode" == "--quiet" && "$(tt_setting paint_calendar)" != "on" ]]; then exit 0; fi
 
-if [[ "$mode" == "--list" ]]; then
-    rm -f "$LIST_FILE" "$RESULT_FILE"
-    /usr/bin/open -W -g "$HELPER" >/dev/null 2>&1
+# One painter at a time. Stopping one timer and starting another is two closes
+# a second apart, and two painters would both launch the same bundle — where
+# the second `open` finds the app already running, passes it nothing, and then
+# reads the *first* one's result. Waiting is the right answer rather than
+# skipping: the painter that waits goes on to read a log that now includes
+# whatever the first one was called about, so the last one out is always the
+# one holding the whole truth. mkdir is the mutex, exactly as in action.sh.
+# A listing takes it too: it clears the request file, which a paint under way
+# is about to hand the helper.
+PAINT_LOCK="$DATA_DIR/.paint.lock"
+waited=0
+until mkdir "$PAINT_LOCK" 2>/dev/null; do
+    # A lock older than a helper could plausibly take is a crashed painter.
+    if [[ -n "$(find "$PAINT_LOCK" -maxdepth 0 -mmin +2 2>/dev/null)" ]]; then
+        rm -rf "$PAINT_LOCK" 2>/dev/null
+        continue
+    fi
+    (( waited++ >= 60 )) && { say "Another paint is still running."; exit 1; }
+    sleep 0.5
+done
+trap 'rm -rf "$PAINT_LOCK" 2>/dev/null' EXIT INT TERM
+
+cal=""
+[[ -r "$CAL_FILE" ]] && cal=$(head -1 "$CAL_FILE" 2>/dev/null | tr -d '\t\r')
+
+# --- listing -----------------------------------------------------------------
+# The helper is handed the request file's path with no file at it, and dumps
+# what it can see beside it, touching nothing. The path is the point: launched
+# bare it wrote into ~/.timetrack whatever install had launched it, so a scratch
+# install's listing landed in the real one's folder and was never seen. This is
+# also the launch that raises the permission prompt, which is why "time
+# calendar" with no calendar chosen yet lists rather than refusing.
+
+if [[ "$mode" == "--list" || ( -z "$cal" && "$mode" != "--quiet" ) ]]; then
+    rm -f "$LIST_FILE" "$RESULT_FILE" "$REQ_FILE"
+    /usr/bin/open -W -g "$HELPER" --args "$REQ_FILE" >/dev/null 2>&1
     if [[ ! -f "$LIST_FILE" ]]; then
         status=""
         [[ -f "$RESULT_FILE" ]] && status=$(cut -f1 "$RESULT_FILE" 2>/dev/null)
@@ -77,28 +109,6 @@ fi
 
 [[ "$(tt_setting paint_calendar)" == "on" ]] || { say "Calendar painting is off."; exit 0; }
 
-# One painter at a time. Stopping one timer and starting another is two closes
-# a second apart, and two painters would both launch the same bundle — where
-# the second `open` finds the app already running, passes it nothing, and then
-# reads the *first* one's result. Waiting is the right answer rather than
-# skipping: the painter that waits goes on to read a log that now includes
-# whatever the first one was called about, so the last one out is always the
-# one holding the whole truth. mkdir is the mutex, exactly as in action.sh.
-PAINT_LOCK="$DATA_DIR/.paint.lock"
-waited=0
-until mkdir "$PAINT_LOCK" 2>/dev/null; do
-    # A lock older than a helper could plausibly take is a crashed painter.
-    if [[ -n "$(find "$PAINT_LOCK" -maxdepth 0 -mmin +2 2>/dev/null)" ]]; then
-        rm -rf "$PAINT_LOCK" 2>/dev/null
-        continue
-    fi
-    (( waited++ >= 60 )) && { say "Another paint is still running."; exit 1; }
-    sleep 0.5
-done
-trap 'rm -rf "$PAINT_LOCK" 2>/dev/null' EXIT INT TERM
-
-cal=""
-[[ -r "$CAL_FILE" ]] && cal=$(head -1 "$CAL_FILE" 2>/dev/null | tr -d '\t\r')
 if [[ -z "$cal" ]]; then
     say "No calendar chosen yet. Pick one in \"${TIMETRACK_VERB:-time} settings\"."
     exit 1
@@ -117,7 +127,8 @@ from=$(date -j -v-"${days}"d -v0H -v0M -v0S +%s 2>/dev/null) || from=$(( now - d
 to=$now
 
 # Category labels, so an event says "MAT2300 Optimeringsmetoder..." rather
-# than a bare key. Read once into an awk lookup rather than once per row.
+# than a bare key — code and name, since the key is neither any more. Read
+# once into an awk lookup rather than once per row.
 tmp="$(mktemp "$DATA_DIR/.paint.XXXXXX")" || exit 1
 trap 'rm -f "$tmp"; rm -rf "$PAINT_LOCK" 2>/dev/null' EXIT INT TERM
 
@@ -143,7 +154,7 @@ adopted=""
         }
         # Pass one: the label for every key.
         NR == FNR {
-            if (FNR > 1 && $1 != "") name[$1] = $2
+            if (FNR > 1 && $1 != "") { name[$1] = $2; code[$1] = $6 }
             next
         }
         FNR == 1 { next }               # the log header
@@ -154,8 +165,8 @@ adopted=""
             if (e - s < minsec) next
 
             key = $4
-            title = key
-            if (name[key] != "") title = key " " name[key]
+            title = name[key] != "" ? name[key] : key
+            if (code[key] != "") title = code[key] " " title
 
             # plan, recap, note, then the pomodoro line — in the order you
             # would want to read them back: what you meant to do, what you

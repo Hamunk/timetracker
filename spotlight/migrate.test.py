@@ -15,6 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SESS9 = ("start_iso\tend_iso\tduration_sec\tcategory\tnote"
          "\tplan\trecap\tpomodoros\tbreak_overrun_sec")
 CAT5 = "key\tname\tkeywords\tlast_used_epoch\thidden"
+CAT6 = CAT5 + "\tcode"
 
 failed = 0
 total = 0
@@ -67,10 +68,11 @@ def legacy():
     r = run(d, "--install", "1.0.0", "2.0.0")
     check("exits 0", r.returncode == 0)
     cats = read(d, "categories.tsv").splitlines()
-    check("header is the full width", cats[0] == CAT5)
-    check("course keyed on its code", any(l.startswith("TDT4100\tTDT4100 Objekt") for l in cats))
-    check("plain name keys on itself, no repeated name",
-          any(l.startswith("jobbsøking\t\t") for l in cats))
+    check("header is the full width", cats[0] == CAT6)
+    check("course keyed on its code, and shown with it",
+          "TDT4100\tTDT4100 Objektorientert programmering\t\t1700000000\t\tTDT4100" in cats)
+    check("plain name keys on itself, named and without a code",
+          "jobbsøking\tjobbsøking\t\t1700000500\t\t" in cats)
     log = read(d, "sessions.tsv").splitlines()
     check("log header widened", log[0] == SESS9)
     check("log rows rewritten to keys", log[1].split("\t")[3] == "TDT4100"
@@ -79,7 +81,7 @@ def legacy():
     check("a snapshot was taken first", len(backups(d)) == 1
           and "TDT4100 Objektorientert" in read(os.path.join(d, "backups", backups(d)[0]),
                                                 "categories.tsv"))
-    check("data-version written", read(d, "data-version").strip() == "2")
+    check("data-version written", read(d, "data-version").strip() == "3")
 
 
 def current():
@@ -87,7 +89,9 @@ def current():
     log = (SESS9 + "\n2026-09-01T10:00:00+0200\t2026-09-01T10:25:00+0200\t1500"
            "\tTDT4100\t\tplan\trecap\t1\t0\n"
            "2026-09-01T11:00:00+0200\t2026-09-01T11:05:00+0200\t300\tTDT4100\n")
-    cats = CAT5 + "\nTDT4100\tOOP\toop,java\t1756720000\t\n"
+    cats = (CAT6 + "\nTDT4100\tOOP\toop,java\t1756720000\t\tTDT4100\n"
+            "med5 patologi\tpatologi\t\t1756720000\t1\tmed5\n"
+            "Lesing\tLesing\t\t1756720000\t\t\n")
     d = folder({"sessions.tsv": log, "categories.tsv": cats,
                 "settings.tsv": "sound\toff\n", "friends.tsv": "id\tname\tcode\tadded\n",
                 ".tomato-alive": "", ".setup-done": ""})
@@ -113,7 +117,9 @@ def short_headers():
     out = read(d, "sessions.tsv").splitlines()
     check("sessions header widened", out[0] == SESS9)
     check("row kept as it was", out[1] == log.splitlines()[1])
-    check("categories header widened", read(d, "categories.tsv").splitlines()[0] == CAT5)
+    out = read(d, "categories.tsv").splitlines()
+    check("categories header widened", out[0] == CAT6)
+    check("a nameless row is named for its key", out[1] == "X\tX\t\t1767000000\t\t")
 
 
 def foreign_header():
@@ -137,10 +143,10 @@ def newer():
 
 def fresh():
     print("a fresh install gets no example categories, and no backup of nothing")
-    d = folder({"categories.tsv": CAT5 + "\n", "sessions.tsv": SESS9 + "\n",
+    d = folder({"categories.tsv": CAT6 + "\n", "sessions.tsv": SESS9 + "\n",
                 "settings.tsv": "", "state": ""})
     r = run(d, "--install", "none", "2.0.0")
-    check("still empty", read(d, "categories.tsv") == CAT5 + "\n")
+    check("still empty", read(d, "categories.tsv") == CAT6 + "\n")
     check("no snapshot, and nothing said about one",
           backups(d) == [] and "Backed up" not in r.stdout)
     print("data kept through an uninstall is backed up when installed again")
@@ -165,7 +171,44 @@ def pruning():
     check("a folder not named like ours is not ours", "mine" in b)
 
 
-for case in (legacy, current, short_headers, foreign_header, newer, fresh, pruning):
+def codes():
+    print("2.0 subjects get the code they were shown with")
+    log = (SESS9 + "\n2026-09-01T10:00:00+0200\t2026-09-01T10:25:00+0200\t1500"
+           "\tTIØ4162\t\t\t\t1\t0\n")
+    d = folder({"sessions.tsv": log, "data-version": "2\n", "categories.tsv": CAT5 + "\n"
+                "TIØ4162\tOrganisasjon og teknologi 2\torgtek2,orgtek\t1790751441\t\n"
+                "jobbsøking\t\t\t1790153260\t\n"
+                "TIØ4566\tStrategisk forsyningsledelse\temne\t1788184777\t1\n"
+                "MAT1\tMatte\t\t1788000000\n"})
+    r = run(d, "--install", "2.0.0", "2.1.0")
+    check("exits 0", r.returncode == 0)
+    out = read(d, "categories.tsv").splitlines()
+    check("header has the code", out[0] == CAT6)
+    check("a course keeps its key and is shown with it as its code",
+          out[1] == "TIØ4162\tOrganisasjon og teknologi 2\torgtek2,orgtek\t1790751441\t\tTIØ4162")
+    check("a plain name is its own name, with no code",
+          out[2] == "jobbsøking\tjobbsøking\t\t1790153260\t\t")
+    check("archived stays archived", out[3].split("\t")[4:] == ["1", "TIØ4566"])
+    check("a four-field row is filled out", out[4] == "MAT1\tMatte\t\t1788000000\t\tMAT1")
+    check("the log is not touched", read(d, "sessions.tsv") == log)
+    check("data-version raised", read(d, "data-version").strip() == "3")
+    once = read(d, "categories.tsv")
+    run(d, "--install", "2.1.0", "2.1.0")
+    check("a second run changes nothing", read(d, "categories.tsv") == once)
+    print("a file seeded half old, half new comes out whole")
+    d = folder({"categories.tsv": CAT6 + "\n"
+                "med5 patologi\tpatologi\t\t1790859949\t\tmed5\n"
+                "Lesing\tLesing\t\t1790859949\t\t\n"
+                "BØK2100\tØkonomistyring\t\t1790000000\t\n"})
+    run(d, "--install", "2.1.0", "2.1.0")
+    out = read(d, "categories.tsv").splitlines()
+    check("new rows untouched, an empty code included",
+          out[1:3] == ["med5 patologi\tpatologi\t\t1790859949\t\tmed5",
+                       "Lesing\tLesing\t\t1790859949\t\t"])
+    check("the old row gets its code", out[3] == "BØK2100\tØkonomistyring\t\t1790000000\t\tBØK2100")
+
+
+for case in (legacy, current, short_headers, foreign_header, newer, fresh, pruning, codes):
     case()
 print("\n%d of %d passed" % (total - failed, total))
 sys.exit(1 if failed else 0)

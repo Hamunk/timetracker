@@ -34,7 +34,11 @@ case "${status:-}" in
             if (( mins >= 60 )); then t="$(( mins / 60 ))h $(( mins % 60 ))m"; else t="${mins}m"; fi
             sub="$t${sub:+ · $sub}"
         fi
-        answer=$("$BIN_DIR/prompt.sh" stop "Stop $cur_key" "$sub")
+        # By its name: the key is whatever the subject was called the day it
+        # was added, and may be nothing like what it is called now.
+        title=$(TT_K="$cur_key" awk -F'\t' 'BEGIN { k=ENVIRON["TT_K"] }
+            NR>1 && $1==k { print $2; exit }' "$CAT_FILE" 2>/dev/null)
+        answer=$("$BIN_DIR/prompt.sh" stop "Stop ${title:-$cur_key}" "$sub")
         [[ "$answer" == STOP$'\t'* || "$answer" == STOP ]] || exit 0
         recap="${answer#STOP}"; recap="${recap#$'\t'}"
         msg=$("$BIN_DIR/action.sh" stop "$recap" "$pressed_at")

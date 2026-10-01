@@ -214,6 +214,10 @@ padding:48px 24px}
 .exmore{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:0 4px 14px;
 font-size:12.5px;color:var(--mut)}
 .exmore .grow{flex:1 1 200px;min-width:0}
+.exmore .note{color:var(--mut);font-size:12.5px}
+.perm .ok{color:var(--ok)}
+.perm .bad{color:var(--accent)}
+.perm a{color:inherit;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 .exmore input[type=text],.exmore select{flex:1 1 180px;min-width:0;width:auto}
 #setup .foot{display:flex;align-items:center;gap:10px;margin-top:30px}
 #setup .step[data-step="0"] .foot{justify-content:center}
@@ -436,7 +440,7 @@ async function poll(){
     renderMini();
     const s=JSON.stringify([d.running&&[d.running.key,d.running.start,d.running.plan],
       d.pomodoro&&[d.pomodoro.phase,d.pomodoro.target,d.pomodoro.completed],
-      d.subjects.map(x=>[x.key,x.title,x.hidden,x.name,x.keywords])]);
+      d.subjects.map(x=>[x.key,x.title,x.hidden,x.name,x.code,x.keywords])]);
     if(s!==sig){sig=s;if(page==="now")renderNow();if(page==="subjects")renderSubjects();}
   }catch(e){$("mini").textContent="Reconnecting…";}
 }
@@ -474,8 +478,8 @@ function renderNow(force){
   const kids=[];
   if(r){
     const run=el("div",{class:"run"},
-      r.title!==r.key?el("div",{class:"code"},r.key):null,
-      el("h1",{},r.title),
+      r.code?el("div",{class:"code"},r.code):null,
+      el("h1",{},r.name||r.title),
       el("div",{class:"clock",id:"clock"},clock(now()-r.start)),
       r.plan?el("div",{class:"plan"},r.plan):null,
       S.pomodoro?el("div",{class:"pomo",id:"pomoline"},...pomoBits()):null);
@@ -508,8 +512,8 @@ function subjectList(list,switching){
   const wrap=el("div",{class:"list"});
   for(const s of list){
     const row=el("div",{class:"item click"+(openKey===s.key?" open":"")},dot(s.key),
-      el("span",{class:"title"},s.title),
-      s.title!==s.key?el("span",{class:"code"},s.key):null,
+      el("span",{class:"title"},s.name||s.title),
+      s.code?el("span",{class:"code"},s.code):null,
       el("span",{class:"go"},switching?"Switch":"Start"));
     row.addEventListener("click",()=>{openKey=openKey===s.key?null:s.key;renderNow(true);});
     wrap.append(row);
@@ -656,7 +660,7 @@ function subjectRow(s){
   const meta=s.sessions?dur(s.total):"";
   const acts=el("span",{class:"row-actions hov"});
   const row=el("div",{class:"item"+(sEdit===s.key?" open":"")},dot(s.key),
-    el("span",{class:"title"},s.title),s.title!==s.key?el("span",{class:"code"},s.key):null,
+    el("span",{class:"title"},s.name||s.title),s.code?el("span",{class:"code"},s.code):null,
     el("span",{class:"meta"},meta),acts);
   const edit=el("button",{class:"btn quiet"},"Edit");
   edit.addEventListener("click",()=>{sEdit=sEdit===s.key?null:s.key;renderSubjects(true);});
@@ -680,18 +684,22 @@ function subjectRow(s){
     acts.append(ar);
   }
   if(sEdit!==s.key)return [row];
-  const name=el("input",{type:"text",value:s.name||(s.title===s.key?s.key:s.title),maxlength:"120",placeholder:"Name"});
+  // Name and code both change freely: the hours are filed under a key that
+  // neither of them is, so a rename moves nothing and loses nothing.
+  const name=el("input",{type:"text",value:s.name||s.title,maxlength:"120",placeholder:"Name"});
+  const code=el("input",{type:"text",class:"short",value:s.code,maxlength:"40",placeholder:"Code (optional)"});
   const kw=el("input",{type:"text",value:s.keywords,maxlength:"200",placeholder:"Other names to type in Spotlight, comma separated"});
+  // A refused save leaves the form as typed: redrawing it from the stored row
+  // would throw away the very edit the message is about.
   const save=async()=>{
-    const n=name.value.trim();
-    // A subject without a code is keyed on its first name; its name column
-    // stays empty until it is renamed, so that it does not read "x – x".
-    const res=await catPost("/api/category/edit",{key:s.key,name:n===s.key?"":n,keywords:kw.value.trim()});
-    if(res.ok)sEdit=null;renderSubjects(true);
+    const res=await post("/api/category/edit",{key:s.key,name:name.value.trim(),
+      code:code.value.trim(),keywords:kw.value.trim()});
+    toast(res.message,!res.ok);
+    if(!res.ok)return;
+    sEdit=null;await poll();renderSubjects(true);
   };
-  onEnter(name,save);onEnter(kw,save);
-  const f=el("div",{class:"form"},name,kw,el("div",{class:"line"},
-    s.title!==s.key||s.name?el("span",{class:"mut",style:"font-size:12.5px"},"Code "+s.key):null,
+  onEnter(name,save);onEnter(code,save);onEnter(kw,save);
+  const f=el("div",{class:"form"},el("div",{class:"line"},name,code),kw,el("div",{class:"line"},
     el("span",{class:"spacer"}),
     el("button",{class:"btn quiet",onclick:()=>{sEdit=null;renderSubjects(true);}},"Cancel"),
     el("button",{class:"btn primary",onclick:save},"Save")));
@@ -704,18 +712,13 @@ async function catPost(path,body){
   await poll();renderSubjects(true);
   return res;
 }
-// The key is what the log stores and can never change, so a code is the key
-// when there is one, and the name is the key when there is not. A name equal
-// to its own key is left out, or the launcher would read "time x – x".
-function subjectBody(name,code){
-  name=name.trim();code=code.trim();
-  if(!code)return {key:name,name:"",keywords:""};
-  return {key:code,name:name===code?"":name,keywords:""};
-}
+// A name and a code, and nothing else: the key the log files hours under is
+// made by action.sh and never seen. It used to be the code, so a second
+// subject in the same course replaced the first without a word.
 async function addSubject(){
   const n=$("s-name").value,c=$("s-code").value;
   if(!n.trim()&&!c.trim()){$("s-name").focus();return;}
-  const res=await catPost("/api/category/add",subjectBody(n||c,c));
+  const res=await catPost("/api/category/add",{name:n.trim(),code:c.trim()});
   if(res.ok){$("s-name").value="";$("s-code").value="";$("s-name").focus();}
 }
 $("s-add").addEventListener("click",addSubject);
@@ -850,6 +853,8 @@ function setRow(s){
     const res=await post("/api/setconf",{changes:{[s.key]:v}});
     if(!res.ok){toast(res.message,true);input.value=s.value;if(input.type==="checkbox")input.checked=s.value==="on";return;}
     s.value=v;ok.classList.add("on");setTimeout(()=>ok.classList.remove("on"),1400);
+    // Switching a tool on asks for its permission there and then.
+    if(v==="on")ASK_NEXT={spotify:"spotify",reminders:"reminders",paint_calendar:"calendar"}[s.key]||"";
     if(s.key==="spotify"||s.key==="reminders"||s.key==="paint_calendar")renderSettings();
   };
   let field;
@@ -901,7 +906,7 @@ function renderSettings(){
     onEnter(pu,add);onEnter(pn,()=>pu.focus());
     sp.push(el("div",{class:"form",style:"padding-left:4px"},el("div",{class:"line"},pn,pu,
       el("button",{class:"btn",onclick:add},"Add"))));
-    sp.push(grantRow("spotify","Allow TimeTracker to control Spotify"));
+    sp.push(permRow("spotify"));
   }
   out.push(el("h2",{},"Spotify"),el("div",{class:"list"},...sp));
   // Reminders
@@ -913,25 +918,18 @@ function renderSettings(){
       if(!r.ok)toast(r.message,true);else{ok.classList.add("on");setTimeout(()=>ok.classList.remove("on"),1400);}});
     onEnter(ln,()=>ln.blur());
     rm.push(el("div",{class:"set"},el("span",{class:"lbl"},"List"),ok,ln));
-    rm.push(grantRow("reminders","Allow access to Reminders"));
+    rm.push(permRow("reminders"));
   }
   out.push(el("h2",{},"Reminders"),el("div",{class:"list"},...rm));
   // Calendar
   const cal=[...rows(["paint_calendar"])];
   if(on("paint_calendar")){
     const sel=el("select",{});
-    sel.append(el("option",{value:""},SET.paint_choices.length?"None":"Press Refresh"));
-    let found=false;
-    for(const c of SET.paint_choices){
-      const o=el("option",{value:c.title},c.source?c.title+" ("+c.source+")":c.title);
-      if(c.title===SET.paint_calendar){o.selected=true;found=true;}sel.append(o);}
-    if(SET.paint_calendar&&!found)sel.append(el("option",{value:SET.paint_calendar,selected:true},SET.paint_calendar+" (not found)"));
+    fillCalendars(sel,SET.paint_choices,SET.paint_calendar);
     sel.addEventListener("change",async()=>{const r=await post("/api/paint/calendar",{name:sel.value});toast(r.message,!r.ok);});
-    const ref=el("button",{class:"btn quiet"},"Refresh");
-    ref.addEventListener("click",async()=>{ref.disabled=true;ref.textContent="Asking…";
-      const r=await post("/api/paint/refresh",{});toast(r.message,!r.ok);loadSettings();});
+    cal.push(permRow("calendar",r=>{if(r.calendars)fillCalendars(sel,r.calendars,sel.value);}));
     cal.push(el("div",{class:"set"},el("span",{class:"lbl"},"Calendar",
-      el("small",{},"Use an empty calendar of its own: its recent events are rewritten to match your log.")),ref,sel));
+      el("small",{},"Use an empty calendar of its own: its recent events are rewritten to match your log.")),sel));
     cal.push(...rows(["paint_days","paint_min_minutes"]));
   }
   out.push(el("h2",{},"Calendar"),el("div",{class:"list"},...cal));
@@ -946,11 +944,41 @@ function renderSettings(){
       el("button",{class:"btn",onclick:()=>post("/api/open/data",{})},"Show in Finder"))));
   $("set-body").replaceChildren(...out);
 }
-function grantRow(tool,label){
-  const b=el("button",{class:"btn"},"Allow");
-  b.addEventListener("click",async()=>{const r=await post("/api/grant",{tool});toast(r.message,!r.ok);});
-  return el("div",{class:"set"},el("span",{class:"lbl"},label,
-    el("small",{},"macOS asks once. Answering now keeps it out of your break.")),b);
+// A tool's macOS permission, asked for and answered in one line under its
+// switch: "Asking macOS…", then "Allowed", or what is wrong and a way to try
+// again. Asked the moment the switch goes on — there used to be an Allow
+// button beside it, and switching a tool on and never pressing it read as
+// done. The same line in the setup and in Settings, for all three tools, so
+// one answer never looks different from another.
+async function askFor(tool,line,after){
+  line.className="perm";line.replaceChildren("Asking macOS…");
+  const r=await post("/api/grant",{tool});
+  const again=el("a",{href:"#"},r.state==="granted"?"Check again":"Try again");
+  again.addEventListener("click",e=>{e.preventDefault();askFor(tool,line,after);});
+  line.replaceChildren(el("span",{class:r.state==="granted"?"ok":"bad"},
+    r.state==="granted"?"✓ Allowed":r.message)," ",again);
+  if(after)after(r);
+}
+let ASK_NEXT="";
+// The calendars the helper last saw, into a dropdown, keeping the one chosen
+// even when it has gone missing — a calendar renamed in Calendar.app should
+// read as "not found", not silently as a different choice.
+function fillCalendars(sel,list,current){
+  sel.replaceChildren(el("option",{value:""},list.length?"Choose a calendar":"No calendars yet"));
+  let found=false;
+  for(const c of list){
+    const o=el("option",{value:c.title},c.source?c.title+" ("+c.source+")":c.title);
+    if(c.title===current){o.selected=true;found=true;}sel.append(o);}
+  if(current&&!found)sel.append(el("option",{value:current,selected:true},current+" (not found)"));
+  sel.disabled=!list.length&&!current;
+}
+function permRow(tool,after){
+  const line=el("span",{class:"perm"});
+  const again=el("a",{href:"#"},"Check");
+  again.addEventListener("click",e=>{e.preventDefault();askFor(tool,line,after);});
+  line.append("macOS asks once, the first time. ",again);
+  if(ASK_NEXT===tool){ASK_NEXT="";setTimeout(()=>askFor(tool,line,after),0);}
+  return el("div",{class:"set"},el("span",{class:"lbl"},"Access",el("small",{},line)));
 }
 async function listPost(path,body){
   const r=await post(path,body);toast(r.message,!r.ok);await loadSettings();return r;
@@ -999,7 +1027,7 @@ $("o-subjects").addEventListener("click",async()=>{
   for(const r of document.querySelectorAll("#o-rows .srow2")){
     const [n,c]=r.querySelectorAll("input");
     if(!n.value.trim()&&!c.value.trim())continue;
-    const res=await post("/api/category/add",subjectBody(n.value||c.value,c.value));
+    const res=await post("/api/category/add",{name:n.value.trim(),code:c.value.trim()});
     if(!res.ok){toast(res.message,true);b.disabled=false;return;}
     r.remove();
   }
@@ -1019,44 +1047,39 @@ $("o-pomo").addEventListener("click",async()=>{
 // the middle of the first break is the worst time to be asked anything.
 const EXTRAS=[
   {key:"spotify",title:"Spotify",text:"Play your playlists on a break",grant:"spotify",
-   note:"macOS asks once. Add playlists later in Settings."},
-  {key:"reminders",title:"Reminders",text:"Save a note from a break",grant:"reminders",
-   note:"macOS asks once."},
+   note:"Add playlists later in Settings."},
+  {key:"reminders",title:"Reminders",text:"Save a note from a break",grant:"reminders"},
   {key:"chat",title:"Messages",text:"See where friends are in their pomodoro, and write on breaks"},
-  {key:"paint_calendar",title:"Calendar",text:"Copy your sessions to a calendar"}];
+  {key:"paint_calendar",title:"Calendar",text:"Copy your sessions to a calendar",grant:"calendar",
+   note:"Use an empty calendar of its own: its recent events are kept matching your log."}];
 const EX={spotify:false,reminders:false,chat:false,paint_calendar:false};
+const EX_OK={};
 let exName=null,exCal=null;
 function buildExtras(){
   const box=$("o-extras");box.replaceChildren();
   for(const x of EXTRAS){
     const t=el("input",{type:"checkbox"});t.checked=EX[x.key];
     const more=el("div",{class:"exmore",hidden:!EX[x.key]});
+    const line=el("span",{class:"perm grow"});
+    // Asked on the way on, once it has said yes: switching off and on again
+    // to look at the page should not raise the question a second time.
     t.addEventListener("change",()=>{EX[x.key]=t.checked;more.hidden=!t.checked;
-      const f=more.querySelector("input[type=text]");if(t.checked&&f)f.focus();});
-    if(x.grant){
-      const b=el("button",{class:"btn"},"Allow");
-      b.addEventListener("click",async()=>{b.disabled=true;
-        const r=await post("/api/grant",{tool:x.grant});toast(r.message,!r.ok);
-        b.disabled=false;b.textContent="Allow again";});
-      more.append(el("span",{class:"grow"},x.note),b);
-    }else if(x.key==="chat"){
+      const f=more.querySelector("input[type=text]");if(t.checked&&f)f.focus();
+      if(t.checked&&x.grant&&!EX_OK[x.grant])askFor(x.grant,line,after);});
+    const after=r=>{EX_OK[x.grant]=r.state==="granted";
+      if(x.grant==="calendar"&&r.calendars)fillCalendars(exCal,r.calendars,exCal.value);};
+    if(x.key==="chat"){
       exName=el("input",{type:"text",maxlength:"24",placeholder:"Your username (optional)"});
       more.append(exName,el("span",{class:"grow",style:"flex-basis:100%"},
         "Friends add you by it. Messages are encrypted and pass through a public relay, "+
         "which sees when you start and end breaks."));
     }else{
-      exCal=el("select",{},el("option",{value:""},"Choose a calendar"));
-      exCal.disabled=true;
-      const b=el("button",{class:"btn"},"Allow");
-      b.addEventListener("click",async()=>{b.disabled=true;b.textContent="Asking…";
-        const r=await post("/api/paint/refresh",{});
-        let list=[];try{list=(await get("/api/settings")).paint_choices||[];}catch(e){}
-        exCal.replaceChildren(el("option",{value:""},list.length?"Choose a calendar":"No calendars found"));
-        for(const c of list)exCal.append(el("option",{value:c.title},c.source?c.title+" ("+c.source+")":c.title));
-        exCal.disabled=!list.length;b.disabled=false;b.textContent="Allow again";
-        if(!r.ok&&!list.length)toast(r.message,true);});
-      more.append(b,exCal,el("span",{class:"grow",style:"flex-basis:100%"},
-        "Use an empty calendar of its own: its recent events are kept matching your log."));
+      more.append(line);
+      if(x.grant==="calendar"){
+        exCal=el("select",{});fillCalendars(exCal,[],"");
+        more.append(exCal);
+      }
+      if(x.note)more.append(el("span",{class:"grow note",style:"flex-basis:100%"},x.note));
     }
     box.append(el("div",{class:"ex"},
       el("div",{class:"set"},el("span",{class:"lbl"},x.title,el("small",{},x.text)),

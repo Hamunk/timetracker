@@ -4,8 +4,8 @@
 #   action.sh start:<key> [plan] [recap_of_previous] [at_epoch]
 #   action.sh stop [recap] [at_epoch]
 #   action.sh plan <text>                    (attach intent to a running timer)
-#   action.sh addcat <key> <name> <keywords>
-#   action.sh editcat <key> <name> <keywords> (rename; keeps last used and hidden)
+#   action.sh addcat <name> <code> <keywords>       (the key is made here)
+#   action.sh editcat <key> <name> <code> <keywords> (keeps last used and hidden)
 #   action.sh hidecat <key> on|off           (keep the history, drop the app)
 #   action.sh delcat <key>                   (row moves to categories.deleted.tsv)
 #   action.sh editsession <sel_start_iso> <sel_dur> <sel_key> \
@@ -24,9 +24,17 @@
 # time spent typing an answer (or ignoring the dialog for two minutes) never
 # leaks into the segment.
 #
-# Categories are identified by a stable key (a course code like BØK2100).
-# Names and keywords are display/search concerns and can change freely without
-# touching a single logged row — that's the point of having a key at all.
+# Categories are identified by a stable key. Names, codes and keywords are
+# display/search concerns and can change freely without touching a single
+# logged row — that's the point of having a key at all.
+#
+# The key used to be the course code, typed by the user, which made the code
+# a primary key nobody had been told about: "med5 patologi" and "med5
+# radiologi" are two subjects in one course, and the second simply overwrote
+# the first. Now the key is made here, from what the subject was called when
+# it was added, and never shown or typed again. Two subjects may share a code
+# or a name; only both at once is refused, because that is two rows nobody
+# could tell apart.
 #
 # The same key indirection is why a category can be retired at all: hidecat
 # takes it out of the launcher and the pickers while every logged row keeps
@@ -65,10 +73,11 @@ GUARD_SECS=$((8 * 3600))
 MAX_EDIT_SECS=$((24 * 3600))   # ceiling for a hand-edited segment
 LOCK_STALE_SECS=30
 MIN_EPOCH=1577836800   # 2020-01-01; below this is corruption, not a timestamp
-# The 5th column is "1" when the category is hidden, empty otherwise. Rows
-# written before it existed simply have four fields, which every reader here
-# already tolerates — a short row means "not hidden".
-CAT_HEADER=$'key\tname\tkeywords\tlast_used_epoch\thidden'
+# The 5th column is "1" when the category is hidden, empty otherwise; the 6th
+# is the code, empty when there is none. Rows written before either existed
+# have fewer fields, which every reader here tolerates — a short row means
+# "not hidden, no code" — and migrate.py has given every older row its code.
+CAT_HEADER=$'key\tname\tkeywords\tlast_used_epoch\thidden\tcode'
 # role is "work" on at most one row and empty on the rest. A short row (no
 # third field) means "not the work playlist", the same tolerance categories.tsv
 # extends to its hidden column.
@@ -147,6 +156,52 @@ label() {
     if [[ -n "$n" ]]; then printf '%s' "$n"; else printf '%s' "$1"; fi
 }
 
+# The subject a code and a name already belong to, if any: its key, then a
+# tab and "1" when it is archived. Folded to lower case, because "MED5
+# Patologi" beside "med5 patologi" is two rows nobody can tell apart, and two
+# launcher bundles a case-insensitive disk would write into one folder. The
+# third argument is the subject being edited, which may keep its own name.
+cat_named() {
+    TT_C="$1" TT_N="$2" TT_SKIP="${3:-}" awk -F'\t' '
+        BEGIN { c=tolower(ENVIRON["TT_C"]); n=tolower(ENVIRON["TT_N"]); skip=ENVIRON["TT_SKIP"] }
+        NR>1 && NF>=4 && $1!="" && $1!=skip && tolower($6)==c &&
+            tolower($2!="" ? $2 : $1)==n { print $1 "\t" $5; exit }
+    ' "$CAT_FILE"
+}
+
+# A new subject's key: what it is called as it is added, so sessions.tsv
+# still reads sensibly to anyone who opens it, made unique against every key
+# in use. That includes the log, not only categories.tsv: a deleted subject
+# leaves its hours under its old key, and a new one that took the key over
+# would quietly inherit them. Folded, so no two keys differ only by case.
+new_key() {
+    TT_B="$1" awk -F'\t' '
+        BEGIN { b=ENVIRON["TT_B"] }
+        FNR>1 { used[tolower(FILENAME==ARGV[1] ? $1 : $4)]=1 }
+        END { k=b; n=1; while (tolower(k) in used) k=b " " ++n; print k }
+    ' "$CAT_FILE" "$SESS_FILE"
+}
+
+# A code on its own is what that subject is called — "MAT2300" with nothing
+# beside it — and a code that only repeats the name is no code. Sets name and
+# code in the caller.
+settle_name() {
+    if [[ -z "$name" ]]; then name="$code"; code=""; fi
+    [[ "$code" == "$name" ]] && code=""
+    return 0
+}
+
+# What a refused duplicate says. An archived twin is the likely one — added
+# again because it was out of sight — so it says where to find it.
+twin_msg() {
+    local shown="${code:+$code }$name"
+    if [[ "${1#*$'\t'}" == "1" ]]; then
+        printf '%s is archived. Restore it in Subjects' "$shown"
+    else
+        printf 'There is already a subject called %s' "$shown"
+    fi
+}
+
 LAST_DUR=0
 # Set by anything that changes a logged row. Read once at the very end, where
 # it detaches a calendar repaint — see the note above the exit.
@@ -215,35 +270,34 @@ bump_category() {
     mv -f "$tmp" "$CAT_FILE"
 }
 
+# Only ever with a key new_key has just made, so this appends; it never finds
+# a row to overwrite. Overwriting was what it did when the key was the code.
 add_category() {
-    local key="$1" name="$2" keywords="$3" now="$4" tmp
+    local key="$1" name="$2" code="$3" keywords="$4" now="$5" tmp
     tmp="$(mktemp "$DATA_DIR/.categories.XXXXXX")"
-    TT_K="$key" TT_N="$name" TT_KW="$keywords" \
+    TT_K="$key" TT_N="$name" TT_C="$code" TT_KW="$keywords" \
     awk -F'\t' -v OFS='\t' -v now="$now" -v hdr="$CAT_HEADER" '
-        BEGIN { k=ENVIRON["TT_K"]; n=ENVIRON["TT_N"]; kw=ENVIRON["TT_KW"] }
+        BEGIN { k=ENVIRON["TT_K"]; n=ENVIRON["TT_N"]; c=ENVIRON["TT_C"]; kw=ENVIRON["TT_KW"] }
         NR==1 { print hdr; next }
-        NF>=4 && $1!="" && $4 ~ /^[0-9]+$/ {
-            if ($1==k) { $2=n; $3=kw; $4=now; $5=""; seen=1 }
-            print
-        }
-        END { if (!seen) print k, n, kw, now }
+        NF>=4 && $1!="" && $4 ~ /^[0-9]+$/ { print }
+        END { print k, n, kw, now, "", c }
     ' "$CAT_FILE" > "$tmp"
     mv -f "$tmp" "$CAT_FILE"
 }
 
-# A rename. addcat would do the same to an existing key, and also stamp it as
+# A rename, of the name or the code or both. It does not stamp the subject as
 # used now — which is what plain "time" reads to decide what to start next, so
 # fixing a typo in a course you have not touched all term would make it the
 # one that starts tomorrow morning.
 edit_category() {
-    local key="$1" name="$2" keywords="$3" tmp
+    local key="$1" name="$2" code="$3" keywords="$4" tmp
     tmp="$(mktemp "$DATA_DIR/.categories.XXXXXX")"
-    TT_K="$key" TT_N="$name" TT_KW="$keywords" \
+    TT_K="$key" TT_N="$name" TT_C="$code" TT_KW="$keywords" \
     awk -F'\t' -v OFS='\t' -v hdr="$CAT_HEADER" '
-        BEGIN { k=ENVIRON["TT_K"]; n=ENVIRON["TT_N"]; kw=ENVIRON["TT_KW"] }
+        BEGIN { k=ENVIRON["TT_K"]; n=ENVIRON["TT_N"]; c=ENVIRON["TT_C"]; kw=ENVIRON["TT_KW"] }
         NR==1 { print hdr; next }
         NF>=4 && $1!="" && $4 ~ /^[0-9]+$/ {
-            if ($1==k) { $2=n; $3=kw }
+            if ($1==k) { $2=n; $3=kw; $6=c }
             print
         }
     ' "$CAT_FILE" > "$tmp"
@@ -509,24 +563,34 @@ start_key() {
 
 case "$query" in
     addcat)
-        key=$(sanitize_field "${2:-}")
-        name=$(sanitize_field "${3:-}")
+        name=$(sanitize_field "${2:-}")
+        code=$(sanitize_field "${3:-}")
         keywords=$(sanitize_field "${4:-}")
-        if [[ -z "$key" ]]; then
-            action_msg="A subject needs a name"
+        settle_name
+        if [[ -z "$name" ]]; then
+            action_msg="A subject needs a name" ; action_rc=1
+        elif twin=$(cat_named "$code" "$name") && [[ -n "$twin" ]]; then
+            action_msg=$(twin_msg "$twin") ; action_rc=1
         else
-            add_category "$key" "$name" "$keywords" "$now"
+            key=$(new_key "${code:+$code }$name")
+            add_category "$key" "$name" "$code" "$keywords" "$now"
             action_msg="Added $(label "$key")"
         fi
         ;;
     editcat)
         key=$(sanitize_field "${2:-}")
         name=$(sanitize_field "${3:-}")
-        keywords=$(sanitize_field "${4:-}")
+        code=$(sanitize_field "${4:-}")
+        keywords=$(sanitize_field "${5:-}")
+        settle_name
         if [[ -z "$key" ]] || ! cat_exists "$key"; then
             action_msg="Unknown subject ${key:-(empty)}" ; action_rc=1
+        elif [[ -z "$name" ]]; then
+            action_msg="A subject needs a name" ; action_rc=1
+        elif twin=$(cat_named "$code" "$name" "$key") && [[ -n "$twin" ]]; then
+            action_msg=$(twin_msg "$twin") ; action_rc=1
         else
-            edit_category "$key" "$name" "$keywords"
+            edit_category "$key" "$name" "$code" "$keywords"
             action_msg="Saved $(label "$key")"
         fi
         ;;

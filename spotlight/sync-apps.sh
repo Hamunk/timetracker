@@ -98,6 +98,13 @@ lowercase_variants() {
     ' 2>/dev/null
 }
 
+# Folded for comparing names the way the disk does: APFS is case-insensitive,
+# so two names that differ only in case are one folder, and the second bundle
+# written there replaces the first.
+fold() {
+    printf '%s' "$1" | perl -CSD -pe '$_ = lc' 2>/dev/null
+}
+
 # Attach search aliases. Spotlight matches these but keeps displaying the
 # filename, which is how a clean title and fuzzy keywords coexist.
 set_aliases() {
@@ -127,7 +134,9 @@ set_aliases() {
 # make_app <app-name> <bundle-id-suffix> <body-script>
 make_app() {
     local app_name="$1" bid="$2" body="$3"
-    local app_path="$APPS_DIR/$app_name.app"
+    # A slash would make a folder of the name. Finder shows a colon in a file
+    # name as a slash, so "Matte 1/2" is still what Spotlight lists.
+    local app_path="$APPS_DIR/${app_name//\//:}.app"
     local macos_dir="$app_path/Contents/MacOS"
 
     mkdir -p "$macos_dir"
@@ -257,20 +266,26 @@ make_app "TimeTracker Media" "media" 'exec "$BIN/pause-media.sh"' > /dev/null
 # hand — with no cycle in progress spotify.sh answers the permission prompt at
 # a calm moment and reports what it can see, which is the quickest way to find
 # out whether the grant survived.
+#
+# Arguments are passed through: the app's "--check" is a launch through this
+# bundle too, so that the grant it asks about is this bundle's grant.
 if [[ -f "$BIN_DIR/spotify.sh" ]]; then
-    make_app "$VERB spotify" "spotify" 'exec "$BIN/spotify.sh"' > /dev/null
+    make_app "$VERB spotify" "spotify" 'exec "$BIN/spotify.sh" "$@"' > /dev/null
 fi
 
 # The break menu's capture box, in the calendar's two-bundle shape: the
 # compiled helper (TimeTracker Reminders.app, built by install.sh) holds the
 # Reminders grant, and this verb exists to make that grant answerable before a
-# break rather than during one. Running it writes nothing — the helper only
-# asks for access and reports back when it is handed no note.
+# break rather than during one. Running it writes no reminder — the helper only
+# asks for access and reports back when there is no note at the path it is
+# handed. The path is what tells it which data folder to answer into: launched
+# bare it answered into ~/.timetrack, and a scratch install's verb waited for
+# an answer in its own folder that never came.
 if [[ -d "$APPS_DIR/TimeTracker Reminders.app" ]]; then
     make_app "$VERB reminders" "reminders" \
         'D="${TIMETRACK_DIR:-$HOME/.timetrack}"
 rm -f "$D/.tomato-reminder-result"
-/usr/bin/open -W -g "${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}/TimeTracker Reminders.app"
+/usr/bin/open -W -g "${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}/TimeTracker Reminders.app" --args "$D/.tomato-reminder"
 IFS=$'"'"'\t'"'"' read -r status detail < "$D/.tomato-reminder-result" 2>/dev/null
 case "${status:-}" in
     ok)     out="Reminders access is granted. Break notes go to “${detail:-Pause Notes}”." ;;
@@ -309,7 +324,23 @@ fi
 
 # --- One app per category ---------------------------------------------------
 
-declare -a wanted_slugs=()
+# The bundles just written, folded, so the prune pass below can keep exactly
+# these. It used to keep anything whose bundle id was still wanted, which kept
+# a renamed subject's old bundle too, under its old name, beside the new one.
+declare -a wanted_apps=()
+
+# Names TimeTracker's own apps already hold. A subject called "Settings"
+# with no code would be "time Settings", one folder with "time settings";
+# one called "Spotify" would be written over the bundle the Automation
+# permission belongs to, and no later sync would ever give that back.
+taken=""
+for app_path in "$APPS_DIR"/*.app; do
+    [[ -e "$app_path" ]] || continue
+    bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+        "$app_path/Contents/Info.plist" 2>/dev/null) || continue
+    [[ "$bid" == "$BID_PREFIX."* && "$bid" != "$BID_PREFIX.cat."* ]] || continue
+    taken+="$(fold "${app_path%.app}")"$'\n'
+done
 
 if [[ -s "$CAT_FILE" ]]; then
     first=1
@@ -318,33 +349,44 @@ if [[ -s "$CAT_FILE" ]]; then
     # keywords would shift last_used into $keywords, fail the digit check
     # below and silently lose its app. action.sh strips every control
     # character from the fields, so \037 can never occur in the data.
-    while IFS=$'\037' read -r key name keywords last hidden || [[ -n "${key:-}" ]]; do
+    while IFS=$'\037' read -r key name keywords last hidden code || [[ -n "${key:-}" ]]; do
         if (( first )); then first=0; [[ "$key" == "key" ]] && continue; fi
         [[ -z "${key:-}" ]] && continue
         [[ "${last:-}" =~ ^[0-9]+$ ]] || continue
-        # Hidden: no bundle. Leaving it out of wanted_slugs is also what makes
+        # Hidden: no bundle. Leaving it out of wanted_apps is also what makes
         # the prune pass below tear down the app it used to have.
         [[ "${hidden:-}" == "1" ]] && continue
 
-        slug=$(slugify "$key")
-        wanted_slugs+=("$slug")
-
-        if [[ -n "${name:-}" && "$name" != "$key" ]]; then
-            app_name="$VERB $key – $name"
+        # Named for what the subject is called, never for its key: the key is
+        # whatever it was called the day it was added, and is not a word
+        # anybody types. The bundle id is the key's, so it survives renames.
+        name="${name:-$key}"
+        if [[ -n "${code:-}" ]]; then
+            app_name="$VERB $code – $name"
         else
-            app_name="$VERB $key"
+            app_name="$VERB $name"
         fi
+        base="$app_name"; n=1
+        while grep -Fxq -- "$(fold "$APPS_DIR/${app_name//\//:}")" <<< "$taken"; do
+            n=$(( n + 1 )); app_name="$base ($n)"
+        done
+        taken+="$(fold "$APPS_DIR/${app_name//\//:}")"$'\n'
 
+        slug=$(slugify "$key")
         app_path=$(make_app "$app_name" "cat.$slug" \
             "$(printf 'exec "$BIN/start.sh" %q' "$key")")
+        wanted_apps+=("$(fold "$app_path")")
 
-        # Aliases: the key, the name, and every keyword.
-        declare -a aliases=("$VERB $key")
-        (( BARE_ALIASES )) && aliases+=("$key")
-        if [[ -n "${name:-}" ]]; then
-            aliases+=("$VERB $name")
-            (( BARE_ALIASES )) && aliases+=("$name")
+        # Aliases: the code, the name, and every keyword. Several subjects
+        # may share a code, and then "time med5" lists all of them, which is
+        # the right answer to it.
+        declare -a aliases=()
+        if [[ -n "${code:-}" ]]; then
+            aliases+=("$VERB $code")
+            (( BARE_ALIASES )) && aliases+=("$code")
         fi
+        aliases+=("$VERB $name")
+        (( BARE_ALIASES )) && aliases+=("$name")
         if [[ -n "${keywords:-}" ]]; then
             IFS=',' read -r -a kws <<< "$keywords"
             for kw in "${kws[@]}"; do
@@ -393,10 +435,10 @@ for app_path in "$APPS_DIR"/*.app; do
         "$LSREGISTER" -u "$app_path" >/dev/null 2>&1
         rm -rf "$app_path"
     elif [[ "$bid" == "$BID_PREFIX.cat."* ]]; then
-        slug="${bid#$BID_PREFIX.cat.}"
+        here=$(fold "$app_path")
         keep=0
-        for w in ${wanted_slugs+"${wanted_slugs[@]}"}; do
-            [[ "$w" == "$slug" ]] && { keep=1; break; }
+        for w in ${wanted_apps+"${wanted_apps[@]}"}; do
+            [[ "$w" == "$here" ]] && { keep=1; break; }
         done
         if [[ "$keep" -eq 0 ]]; then
             "$LSREGISTER" -u "$app_path" >/dev/null 2>&1

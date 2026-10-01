@@ -31,6 +31,13 @@ Steps:
      columns, and categories.tsv the hidden one. Old rows keep fewer fields,
      which every reader tolerates; the header has to advertise the full width
      or a spreadsheet will refuse the wider rows.
+  3  codes of their own. The key was the course code when there was one, so
+     two subjects in one course could not both exist: adding the second
+     overwrote the first. The code is now a column, the key is made by
+     action.sh and never shown, and every older row gets the code it was
+     shown with — its key, when it had a name beside it. A row with no name
+     was keyed on its name, and gets that name back and no code. Nothing in
+     sessions.tsv changes: the keys stay exactly what they were.
 
 There used to be a seed here: four example courses for a fresh install to
 look at. It was removed because an install with categories never opens its
@@ -52,10 +59,10 @@ BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 
 # The number of the last step below. Raise it with every step added, and
 # never reuse one.
-DATA_VERSION = 2
+DATA_VERSION = 3
 KEEP_BACKUPS = 10
 
-CAT_HEADER = "key\tname\tkeywords\tlast_used_epoch\thidden"
+CAT_HEADER = "key\tname\tkeywords\tlast_used_epoch\thidden\tcode"
 SESS_HEADER = ("start_iso\tend_iso\tduration_sec\tcategory\tnote"
                "\tplan\trecap\tpomodoros\tbreak_overrun_sec")
 COURSE_CODE = re.compile(r"([A-ZÆØÅ]{2,4}\s?\d{4})", re.IGNORECASE)
@@ -240,9 +247,46 @@ def step_headers(_stamp):
         say("widened the categories.tsv header")
 
 
+# --------------------------------------------------------------------------
+# step 3: codes of their own
+# --------------------------------------------------------------------------
+
+def step_codes(_stamp):
+    """Give every row a sixth field, filled the way it used to be shown.
+
+    Decided per row by its width, so a file half-written by both versions —
+    a scratch install seeded from a real one, say — comes out whole. A row of
+    six fields is left exactly as it is, empty code and all.
+    """
+    try:
+        with open(CAT_FILE, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return
+    if not lines or not lines[0].startswith("key\t"):
+        return
+    out, changed = [CAT_HEADER], 0
+    for line in lines[1:]:
+        p = line.split("\t")
+        if len(p) < 6 and len(p) >= 4 and p[0]:
+            p += [""] * (5 - len(p))
+            key, name = p[0], p[1].strip()
+            p.append(key if name and name != key else "")
+            p[1] = name or key
+            changed += 1
+        if line or p != [""]:
+            out.append("\t".join(p))
+    if not changed and lines[0] == CAT_HEADER:
+        return
+    write_atomic(CAT_FILE, "\n".join(out) + "\n")
+    if changed:
+        say(f"gave {changed} subject{'' if changed == 1 else 's'} a code column")
+
+
 STEPS = [
     (1, step_keyed_categories),
     (2, step_headers),
+    (3, step_codes),
 ]
 
 

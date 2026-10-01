@@ -12,8 +12,9 @@
 // bundle launched through LaunchServices. Exec'ing the binary directly is
 // denied without a prompt.
 //
-//   TimeTracker Calendar.app --args <dir>/.paint-request.tsv    paint
-//   TimeTracker Calendar.app                                    list calendars
+//   TimeTracker Calendar.app --args <dir>/.paint-request.tsv    paint it, or,
+//                                       with no such file there, list calendars
+//   TimeTracker Calendar.app                                    list, into ~/.timetrack
 //
 // The request file, tab separated, written by paint-calendar.sh:
 //
@@ -71,9 +72,15 @@ func requestPath() -> String? {
     return nil
 }
 
+// The path names the data folder even when there is no request in it: that is
+// how a listing knows where to put its answer. It used to be launched bare for
+// a listing, and fell back to ~/.timetrack — so a scratch install's "Allow"
+// wrote its answer into the real install's folder and then waited, for ever,
+// for one in its own.
 let request = requestPath()
 let dir = (request as NSString?)?.deletingLastPathComponent
     ?? "\(FileManager.default.homeDirectoryForCurrentUser.path)/.timetrack"
+let listing = request.map { !FileManager.default.fileExists(atPath: $0) } ?? true
 
 func write(_ text: String, _ name: String) {
     try? text.write(toFile: dir + "/" + name, atomically: true, encoding: .utf8)
@@ -118,7 +125,7 @@ if !granted { finish(["denied", ""], code: 1) }
 // the calendars you could paint into, which is what the settings page offers
 // you to choose from. It writes nothing to any calendar.
 
-if request == nil {
+if listing {
     var out = "STATUS\tok\n"
     for cal in store.calendars(for: .event) where cal.allowsContentModifications {
         let title = cal.title.replacingOccurrences(of: "\t", with: " ")

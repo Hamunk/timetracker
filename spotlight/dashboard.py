@@ -94,10 +94,12 @@ _last_request = time.time()
 # --------------------------------------------------------------------------
 
 def read_categories():
-    """key -> {name, keywords, last, hidden}. The log stores keys only.
+    """key -> {name, code, keywords, last, hidden}. The log stores keys only.
 
-    A row written before the hidden column existed has four fields, which
-    means not hidden — the same reading every other script here uses.
+    A row written before the hidden or code column existed is shorter, which
+    means not hidden and no code — the same reading every other script here
+    uses. The name falls back to the key: a row from before migrate.py named
+    every subject could have none.
     """
     cats = {}
     try:
@@ -111,21 +113,32 @@ def read_categories():
                         last = int(p[3])
                     except ValueError:
                         last = 0
-                    cats[p[0]] = {"name": p[1], "keywords": p[2], "last": last,
-                                  "hidden": len(p) > 4 and p[4] == "1"}
+                    cats[p[0]] = {"name": p[1] or p[0], "keywords": p[2], "last": last,
+                                  "hidden": len(p) > 4 and p[4] == "1",
+                                  "code": p[5] if len(p) > 5 else ""}
     except OSError:
         pass
+    # A name two subjects share — "patologi" in med5 and in med6 — is told
+    # apart by its code wherever the code is not already on screen beside it.
+    seen = {}
+    for c in cats.values():
+        n = c["name"].lower()
+        seen[n] = seen.get(n, 0) + 1
+    for c in cats.values():
+        c["title"] = (f'{c["code"]} {c["name"]}'
+                      if c["code"] and seen[c["name"].lower()] > 1 else c["name"])
     return cats
 
 
 def title_of(key, cats):
-    """What a category is called on screen: its name, or its key if it has none.
-
-    The key is a course code more often than not, which is how its owner
-    thinks of it in a launcher and not how anybody reads a list.
+    """What a category is called on screen: its name — with its code, when
+    another subject has the same name — or, for hours logged under a subject
+    since deleted, its key, said to be that. The key is the name it was added
+    under, so a subject deleted and added again would otherwise be two rows of
+    History with one title and no way to tell which hours are which.
     """
     c = cats.get(key)
-    return (c and c["name"]) or key
+    return c["title"] if c else f"{key} (deleted)"
 
 
 def read_playlists():
@@ -353,6 +366,7 @@ def subjects(cats, rows, running_key):
             "key": key,
             "title": title_of(key, cats),
             "name": c["name"] if c else "",
+            "code": c["code"] if c else "",
             "keywords": c["keywords"] if c else "",
             "hidden": bool(c and c["hidden"]),
             "orphan": c is None,
@@ -389,7 +403,10 @@ def build_state():
         elapsed = max(0, now - state["start"])
         day_t += elapsed
         week_t += elapsed
+        c = cats.get(state["key"])
         running = {"key": state["key"], "title": title_of(state["key"], cats),
+                   "name": c["name"] if c else state["key"],
+                   "code": c["code"] if c else "",
                    "start": state["start"], "elapsed": elapsed,
                    "plan": state["plan"]}
 
@@ -703,17 +720,18 @@ def post_setconf(text, whole, body):
 
 
 def post_category_add(text, whole, body):
-    key = text("key", 60)
-    if not key:
+    name, code = text("name", 120), text("code", 40)
+    if not name and not code:
         return False, "A subject needs a name"
-    ok, msg = action("addcat", key, text("name", 120), text("keywords", 200))
+    ok, msg = action("addcat", name, code, text("keywords", 200))
     if ok:
         schedule_sync()
     return ok, msg
 
 
 def post_category_edit(text, whole, body):
-    ok, msg = action("editcat", text("key", 120), text("name", 120), text("keywords", 200))
+    ok, msg = action("editcat", text("key", 120), text("name", 120), text("code", 40),
+                     text("keywords", 200))
     if ok:
         schedule_sync()
     return ok, msg
@@ -783,27 +801,70 @@ def post_paint_calendar(text, whole, body):
     return action("setpaintcal", text("name", 200) or "-")
 
 
-def post_paint_refresh(text, whole, body):
-    # Runs the helper so it can list the calendars again, and the first time
-    # so macOS can ask about access. Nothing from the request reaches it.
-    if not os.access(PAINT_SH, os.X_OK):
-        return False, "The calendar helper is missing"
-    ok, msg = run([PAINT_SH, "--list"], timeout=90)
-    return ok, msg or "Done"
+def take(path):
+    """The first word of a one-line answer file, which is then removed."""
+    word = first_line(path).split("\t")[0]
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return word
+
+
+def ask_permission(tool):
+    """Ask macOS for one tool's permission, through the bundle that holds it,
+    and wait for the answer: granted, denied, closed (Spotify, which is only
+    asked while it runs), missing, or error.
+
+    It used to open the launcher verb and return at once, so the answer came
+    back as that verb's own dialog — or, from a scratch install, did not come
+    back at all — and looked nothing like the line the page shows for
+    everything else. Now the page asks and the page answers. Each helper is
+    handed a path in this install's folder, which is where it answers.
+    """
+    if tool == "reminders":
+        app = os.path.join(APPS_DIR, "TimeTracker Reminders.app")
+        if not os.path.isdir(app):
+            return "missing"
+        res = os.path.join(DATA_DIR, ".tomato-reminder-result")
+        take(res)
+        run(["/usr/bin/open", "-W", "-g", app, "--args",
+             os.path.join(DATA_DIR, ".tomato-reminder")], timeout=90)
+        return {"ok": "granted", "denied": "denied"}.get(take(res), "error")
+    if tool == "spotify":
+        app = os.path.join(APPS_DIR, f"{VERB} spotify.app")
+        if not os.path.isdir(app):
+            return "missing"
+        res = os.path.join(DATA_DIR, ".spotify-check")
+        take(res)
+        run(["/usr/bin/open", "-W", "-g", app, "--args", "--check"], timeout=90)
+        return {"ok": "granted", "denied": "denied", "closed": "closed"}.get(take(res), "error")
+    if tool == "calendar":
+        if not os.access(PAINT_SH, os.X_OK):
+            return "missing"
+        ok, msg = run([PAINT_SH, "--list"], timeout=90)
+        return "granted" if ok else ("denied" if "refused" in msg else "error")
+    return "error"
+
+
+PANES = {"spotify": "Automation", "reminders": "Reminders", "calendar": "Calendars"}
 
 
 def post_grant(text, whole, body):
-    # Opens the launcher verb for one tool, which is exactly what typing it
-    # would do: the helper asks macOS for its permission and reports back.
-    # The bundle name is built from a fixed list.
     tool = text("tool", 20)
-    if tool not in ("spotify", "reminders", "calendar"):
+    if tool not in PANES:
         return False, "Unknown tool"
-    bundle = os.path.join(APPS_DIR, f"{VERB} {tool}.app")
-    if not os.path.isdir(bundle):
-        return False, "That helper is not installed"
-    ok, _ = run(["/usr/bin/open", "-g", bundle], timeout=20)
-    return ok, "Answer the macOS prompt if one appears" if ok else "Could not open the helper"
+    state = ask_permission(tool)
+    message = {
+        "granted": "Allowed",
+        "denied": f"Not allowed. Turn it on in System Settings → Privacy & Security → {PANES[tool]}.",
+        "closed": "Open Spotify, then try again.",
+        "missing": "Not installed.",
+    }.get(state, "No answer. Try again.")
+    extra = {"state": state}
+    if tool == "calendar":
+        extra["calendars"] = read_paint_choices()
+    return state == "granted", message, extra
 
 
 def post_open_data(text, whole, body):
@@ -911,7 +972,6 @@ POSTS = {
     "/api/playlist/work": post_playlist_work,
     "/api/reminders/list": post_reminders_list,
     "/api/paint/calendar": post_paint_calendar,
-    "/api/paint/refresh": post_paint_refresh,
     "/api/grant": post_grant,
     "/api/open/data": post_open_data,
     "/api/update/check": post_update_check,

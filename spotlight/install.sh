@@ -83,7 +83,7 @@ mkdir -p "$BIN_DIR"
 chmod 700 "$DATA_DIR"
 
 SESS_HEADER=$'start_iso\tend_iso\tduration_sec\tcategory\tnote\tplan\trecap\tpomodoros\tbreak_overrun_sec'
-CAT_HEADER=$'key\tname\tkeywords\tlast_used_epoch\thidden'
+CAT_HEADER=$'key\tname\tkeywords\tlast_used_epoch\thidden\tcode'
 
 # Seed the data files so the first launch has something to read.
 [[ -f "$DATA_DIR/state" ]] || : > "$DATA_DIR/state"

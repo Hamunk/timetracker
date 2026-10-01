@@ -63,23 +63,8 @@ POMO_FILE="$DATA_DIR/pomodoro"
 
 IDLE_MAX=3      # ticks with nothing to do, outside a break, before giving up
 GUARD=10800     # 3h backstop: no agent outlives a plausible break
-
-# --- one agent at a time -----------------------------------------------------
-# LaunchServices already refuses to relaunch a running app, so a second `open`
-# normally never gets here. It does get here after a crash left a stale pid
-# file, and it would get here if the bundle were ever launched by hand while a
-# break was live — two agents both writing $STATE_FILE would flicker the panel
-# between two truths.
-if [[ -f "$PID_FILE" ]]; then
-    other=$(head -1 "$PID_FILE" 2>/dev/null) || other=""
-    if [[ "$other" =~ ^[0-9]+$ ]] && kill -0 "$other" 2>/dev/null; then
-        # A live agent will pick up whatever command is waiting; nothing to do.
-        exit 0
-    fi
-fi
-printf '%s\n' "$$" > "$PID_FILE"
-cleanup() { rm -f "$PID_FILE"; }
-trap cleanup EXIT
+# What --check found: one word, for the app (see below).
+CHECK_FILE="$DATA_DIR/.spotify-check"
 
 # --- talking to Spotify ------------------------------------------------------
 # -x is exact so Spotify's helper processes don't count as Spotify.
@@ -296,6 +281,27 @@ take_command() {
     return 0
 }
 
+# --- --check: the app's question ------------------------------------------------
+# Can this bundle reach Spotify? Asked by the app when Spotify is switched on,
+# and answered in one word in a file, not in a dialog: the app shows every
+# permission's answer the same way, in a line under the switch, and a dialog
+# from somewhere else was the one that looked different. Spotify is asked one
+# question if it is running — which is what raises the Automation prompt — and
+# none if it is not: "closed" says so, and the app asks you to open it.
+# It never touches $STATE_FILE, which a break's agent may own.
+if [[ "${1:-}" == "--check" ]]; then
+    rm -f "$CHECK_FILE"
+    word=closed
+    # A minute, not the agent's four seconds: the first time, this question
+    # is what puts the prompt on screen, and a person has to read it.
+    if running; then
+        if osa 60 'tell application "Spotify" to return player state as text' >/dev/null
+        then word=ok; else word=denied; fi
+    fi
+    printf '%s\n' "$word" > "$CHECK_FILE"
+    exit 0
+fi
+
 # --- launched by hand --------------------------------------------------------
 # No pomodoro file means nothing sent us here: this is the Spotlight verb
 # ("time spotify"), and its whole job is to raise the Automation prompt at a
@@ -333,6 +339,24 @@ end run
 EOS
     exit 0
 fi
+
+# --- one agent at a time -----------------------------------------------------
+# LaunchServices already refuses to relaunch a running app, so a second `open`
+# normally never gets here. It does get here after a crash left a stale pid
+# file, and it would get here if the bundle were ever launched by hand while a
+# break was live — two agents both writing $STATE_FILE would flicker the panel
+# between two truths. Only the agent below needs this; the two modes above
+# answer once and leave.
+if [[ -f "$PID_FILE" ]]; then
+    other=$(head -1 "$PID_FILE" 2>/dev/null) || other=""
+    if [[ "$other" =~ ^[0-9]+$ ]] && kill -0 "$other" 2>/dev/null; then
+        # A live agent will pick up whatever command is waiting; nothing to do.
+        exit 0
+    fi
+fi
+printf '%s\n' "$$" > "$PID_FILE"
+cleanup() { rm -f "$PID_FILE"; }
+trap cleanup EXIT
 
 # --- the loop ----------------------------------------------------------------
 # A pending command is served before anything else and before the want file is

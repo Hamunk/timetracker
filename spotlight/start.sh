@@ -47,8 +47,21 @@ fi
 switching=0
 [[ "${status:-}" == "RUNNING" && -n "${cur_key:-}" && "$cur_key" != "$key" ]] && switching=1
 
-name=$(TT_K="$key" awk -F'\t' 'BEGIN { k=ENVIRON["TT_K"] }
-    NR>1 && $1==k { print $2; exit }' "$CAT_FILE" 2>/dev/null)
+# What a key is called, then a tab and its code. The key is never shown: it
+# is whatever the subject was called the day it was added. The dialog said
+# "Start med5" over the name, which with three subjects in med5 was three
+# dialogs nobody could tell apart; it says "Start patologi" over "med5" now.
+cat_title() {
+    TT_K="$1" awk -F'\t' 'BEGIN { k=ENVIRON["TT_K"] }
+        NR>1 && $1==k { print ($2 != "" ? $2 : $1) "\t" $6; exit }' "$CAT_FILE" 2>/dev/null
+}
+IFS=$'\t' read -r title code <<< "$(cat_title "$key")"
+title="${title:-$key}"
+cur_title=""
+if (( switching )); then
+    IFS=$'\t' read -r cur_title _ <<< "$(cat_title "$cur_key")"
+    cur_title="${cur_title:-$cur_key}"
+fi
 
 pomodoro=0; plan=""; recap=""
 if [[ "${2:-}" == "--answer" ]]; then
@@ -61,12 +74,12 @@ else
     # somebody answered.
     ticked=0
     [[ "$(tt_setting pomodoro_default)" == "on" ]] && ticked=1
-    sub="$name"
+    sub="${code:-}"
     if (( switching )); then
-        [[ -n "${cur_plan:-}" ]] && sub="${sub:+$sub · }Planned for $cur_key: $cur_plan"
-        answer=$("$BIN_DIR/prompt.sh" switch "Switch to $key" "$sub" "$cur_key" "$ticked")
+        [[ -n "${cur_plan:-}" ]] && sub="${sub:+$sub · }Planned for $cur_title: $cur_plan"
+        answer=$("$BIN_DIR/prompt.sh" switch "Switch to $title" "$sub" "$cur_title" "$ticked")
     else
-        answer=$("$BIN_DIR/prompt.sh" start "Start $key" "$sub" "$ticked")
+        answer=$("$BIN_DIR/prompt.sh" start "Start $title" "$sub" "$ticked")
     fi
     # Split on US, not on the tab: tab is IFS whitespace, and read collapses
     # a run of it, so an empty recap would hand the plan to the recap.
