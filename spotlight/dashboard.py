@@ -243,12 +243,35 @@ def read_pomodoro(state):
     return {"phase": p[0], "target": target, "completed": done, "overrun": over}
 
 
+_settings_cache = (None, [])
+
+
 def read_settings():
     """Every setting via settings.sh, the table's one home.
 
     A list of {key, value, default, min, max, step, kind}. Empty means the
     helper is missing or broken, which the page says rather than guessing.
+
+    Kept until settings.tsv or settings.sh changes. Asking the table is a
+    bash run with an awk per key, the window asks every two seconds, and
+    the answer only moves when one of those two files does.
     """
+    global _settings_cache
+    stamp = []
+    for path in (os.path.join(DATA_DIR, "settings.tsv"), SETTINGS_SH):
+        try:
+            st = os.stat(path)
+            stamp.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            stamp.append(None)
+    if _settings_cache[0] == stamp and _settings_cache[1]:
+        return [dict(s) for s in _settings_cache[1]]
+    out = _read_settings()
+    _settings_cache = (stamp, out)
+    return [dict(s) for s in out]
+
+
+def _read_settings():
     script = (
         '. "$1" || exit 1\n'
         'for k in $(tt_setting_keys); do\n'
