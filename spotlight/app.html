@@ -1,0 +1,874 @@
+<!doctype html>
+<!-- TimeTracker's window. Served by dashboard.py on 127.0.0.1, shown by
+     TimeTracker.app in a web view (or, without the app, by the browser).
+     One page, six views and a first-run setup, all drawn from the JSON the
+     server reads out of the data folder; every change goes back to it as a
+     POST, which hands it to action.sh, start.sh or the chat helper.
+
+     The look is deliberately quiet: one typeface, one accent, hairlines
+     instead of boxes, and no sentence where a word will do. The session in
+     progress is the only large thing on screen. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TimeTracker</title>
+<style>
+:root{color-scheme:light dark;
+--bg:#f6f5f2;--side:#efeee9;--fg:#1d1d1b;--mut:#85827b;--faint:#b5b1a9;
+--line:#e5e2dc;--hover:rgba(0,0,0,.04);--field:#fff;--accent:#c4452e;
+--accent-soft:rgba(196,69,46,.1);--ok:#3f7d4e}
+@media (prefers-color-scheme:dark){:root{
+--bg:#161615;--side:#1b1b1a;--fg:#ecebe6;--mut:#8f8c85;--faint:#57554f;
+--line:#2a2927;--hover:rgba(255,255,255,.05);--field:#1f1f1d;--accent:#e2694f;
+--accent-soft:rgba(226,105,79,.14);--ok:#72b582}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);display:flex;
+font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+-webkit-font-smoothing:antialiased;-webkit-user-select:none;user-select:none;cursor:default}
+input,textarea,.sel{-webkit-user-select:text;user-select:text}
+button{font:inherit;color:inherit}
+a{color:var(--accent);text-decoration:none}
+
+/* --- sidebar --- */
+#nav{width:176px;flex:none;background:var(--side);padding:52px 10px 16px;
+display:flex;flex-direction:column;gap:1px;border-right:1px solid var(--line)}
+#nav a{display:block;padding:6px 12px;border-radius:7px;color:var(--mut);font-size:13.5px}
+#nav a:hover{color:var(--fg)}
+#nav a.on{color:var(--fg);background:var(--hover);font-weight:500}
+#nav .grow{flex:1}
+#nav .now-mini{padding:8px 12px;font-size:12px;color:var(--mut);
+font-variant-numeric:tabular-nums;line-height:1.4}
+#nav .now-mini b{display:block;color:var(--fg);font-weight:500;white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis}
+#nav .badge{float:right;min-width:18px;height:18px;border-radius:9px;background:var(--accent);
+color:#fff;font-size:11px;font-weight:600;text-align:center;line-height:18px;padding:0 5px}
+main{flex:1;overflow-y:auto;padding:44px 48px 64px}
+.page{max-width:640px;margin:0 auto;display:none}
+.page.on{display:block}
+@media (max-width:640px){#nav{width:120px}main{padding:40px 22px 50px}}
+
+/* --- type --- */
+h1{font-size:26px;font-weight:300;letter-spacing:-.01em;margin:0 0 6px}
+h2{font-size:13px;font-weight:500;color:var(--mut);margin:34px 0 8px}
+.lead{color:var(--mut);margin:0 0 22px}
+.mut{color:var(--mut)}
+.num{font-variant-numeric:tabular-nums}
+kbd{font:inherit;font-size:12px;padding:1px 6px;border-radius:5px;border:1px solid var(--line);
+background:var(--field)}
+
+/* --- controls --- */
+.btn{border:1px solid var(--line);background:var(--field);border-radius:8px;padding:6px 14px;
+font-size:13px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--faint)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.quiet{border-color:transparent;background:none;color:var(--mut);padding:6px 8px}
+.btn.quiet:hover{color:var(--fg)}
+.btn.danger{color:var(--accent)}
+.btn.armed{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn[disabled]{opacity:.45;cursor:default}
+.btn.big{font-size:15px;padding:10px 28px;border-radius:10px}
+input[type=text],input[type=number],input[type=datetime-local],select{font:inherit;font-size:14px;
+color:var(--fg);background:var(--field);border:1px solid var(--line);border-radius:8px;
+padding:7px 10px;width:100%;outline:none}
+input:focus,select:focus{border-color:var(--faint);box-shadow:0 0 0 3px var(--accent-soft)}
+input::placeholder{color:var(--faint)}
+select{-webkit-appearance:none;appearance:none;padding-right:28px;cursor:pointer;
+background:var(--field) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2385827b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center/10px 6px}
+.toggle{position:relative;display:inline-block;width:34px;height:20px;flex:none}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.toggle span{position:absolute;inset:0;border-radius:10px;background:var(--line);transition:background .15s;cursor:pointer}
+.toggle span::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;
+background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s}
+.toggle input:checked+span{background:var(--accent)}
+.toggle input:checked+span::after{transform:translateX(14px)}
+.check{display:inline-flex;align-items:center;gap:8px;cursor:pointer;color:var(--mut);font-size:13px}
+.row-actions{display:flex;gap:6px;align-items:center}
+.spacer{flex:1}
+
+/* --- lists --- */
+.list{border-top:1px solid var(--line)}
+.item{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--line);min-height:46px}
+.item.click{cursor:pointer}
+.item.click:hover{background:var(--hover)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.item .title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .code{color:var(--mut);font-size:12.5px;white-space:nowrap}
+.item .meta{color:var(--mut);font-size:12.5px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.item .go{color:var(--accent);font-size:13px;opacity:0;transition:opacity .1s}
+.item.click:hover .go{opacity:1}
+.item .hov{opacity:0;transition:opacity .1s}
+.item:hover .hov,.item.open .hov{opacity:1}
+.form{padding:12px 4px 16px 25px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.form .line{display:flex;gap:8px;align-items:center}
+.form label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut);flex:1}
+.empty{color:var(--mut);padding:18px 4px}
+
+/* --- now --- */
+.run{padding:6px 0 4px}
+.run .code{color:var(--mut);font-size:13px;margin-bottom:2px}
+.run h1{font-size:30px;margin-bottom:0}
+.clock{font-size:64px;font-weight:200;letter-spacing:-.02em;font-variant-numeric:tabular-nums;
+line-height:1.1;margin:18px 0 6px}
+.run .plan{color:var(--mut)}
+.run .pomo{color:var(--mut);font-size:13px;margin-top:4px;font-variant-numeric:tabular-nums}
+.run .pomo i{display:inline-block;width:7px;height:7px;border-radius:50%;border:1px solid var(--faint);
+margin-left:4px;vertical-align:1px}
+.run .pomo i.f{background:var(--accent);border-color:var(--accent)}
+.run .acts{margin-top:22px;display:flex;gap:8px}
+.idle h1{color:var(--mut)}
+.totals{display:flex;gap:28px;margin-top:30px;color:var(--mut);font-size:13px}
+.totals b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums;margin-left:6px}
+.stopform{margin-top:20px;display:flex;flex-direction:column;gap:10px;max-width:420px}
+
+/* --- history --- */
+.stats{display:flex;gap:40px;margin:18px 0 6px}
+.stats div{display:flex;flex-direction:column}
+.stats span{color:var(--mut);font-size:12.5px}
+.stats b{font-size:22px;font-weight:300;font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+td,th{padding:8px 4px;border-bottom:1px solid var(--line);text-align:left}
+th{font-weight:400;color:var(--mut);font-size:12.5px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;width:80px}
+.day{margin-top:22px}
+.dayhead{display:flex;justify-content:space-between;color:var(--mut);font-size:12.5px;
+padding:0 4px 6px;border-bottom:1px solid var(--line)}
+.sess .time{color:var(--mut);font-size:12.5px;width:86px;flex:none;font-variant-numeric:tabular-nums}
+.sess .notes{display:block;color:var(--mut);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess .body{flex:1;min-width:0}
+.sess .body .title{display:block}
+.flag{color:var(--accent);font-size:12px;margin-left:6px}
+
+/* --- settings --- */
+.set{display:flex;align-items:center;gap:16px;padding:10px 4px;border-bottom:1px solid var(--line);min-height:46px}
+.set .lbl{flex:1;min-width:0}
+.set .lbl small{display:block;color:var(--mut);font-size:12.5px}
+.set input[type=number]{width:84px;text-align:right}
+.set input.key{width:84px;text-align:center}
+.set .unit{color:var(--mut);font-size:12.5px;width:28px}
+.set select{width:220px}
+.saved{color:var(--ok);font-size:12px;opacity:0;transition:opacity .2s}
+.saved.on{opacity:1}
+
+/* --- help --- */
+.help p{margin:0 0 12px}
+.help table td:first-child{white-space:nowrap;width:1%;padding-right:20px}
+.help code{font:13px ui-monospace,Menlo,monospace}
+
+/* --- toast --- */
+#toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;
+background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:9px;font-size:13px;
+transition:opacity .2s,transform .2s;pointer-events:none;max-width:80vw;z-index:30}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#toast.bad{background:var(--accent);color:#fff}
+
+/* --- first run --- */
+#setup{position:fixed;inset:0;background:var(--bg);z-index:20;display:none;overflow-y:auto}
+#setup.on{display:block}
+#setup .wrap{max-width:460px;margin:0 auto;padding:90px 24px 60px}
+#setup h1{font-size:30px;margin-bottom:8px}
+#setup .step{display:none}
+#setup .step.on{display:block}
+#setup .foot{display:flex;align-items:center;gap:10px;margin-top:30px}
+#setup .pips{display:flex;gap:6px}
+#setup .pips i{width:6px;height:6px;border-radius:50%;background:var(--line)}
+#setup .pips i.on{background:var(--accent)}
+.mark{font-size:54px;line-height:1;margin-bottom:22px}
+.choice{display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--line);
+border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
+.choice.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.choice b{display:block;font-weight:500}
+.choice small{color:var(--mut)}
+.srows{display:flex;flex-direction:column;gap:8px}
+.srow2{display:flex;gap:8px}
+.srow2 input:first-child{flex:2}
+.srow2 input:last-child{flex:1}
+</style></head><body>
+<nav id="nav">
+  <a href="#now" data-page="now">Now</a>
+  <a href="#history" data-page="history">History</a>
+  <a href="#subjects" data-page="subjects">Subjects</a>
+  <a href="#friends" data-page="friends">Friends<span class="badge" id="fbadge" hidden></span></a>
+  <a href="#settings" data-page="settings">Settings</a>
+  <a href="#help" data-page="help">Help</a>
+  <div class="grow"></div>
+  <div class="now-mini" id="mini"></div>
+</nav>
+<main>
+<section class="page" id="p-now"></section>
+
+<section class="page" id="p-history">
+  <h1>History</h1>
+  <div class="stats" id="h-stats"></div>
+  <div id="h-flag"></div>
+  <h2>By subject</h2>
+  <table><thead><tr><th>Subject</th><th class="n">Today</th><th class="n">Week</th><th class="n">All</th></tr></thead>
+  <tbody id="h-table"></tbody></table>
+  <h2>Sessions</h2>
+  <div id="h-days"></div>
+</section>
+
+<section class="page" id="p-subjects">
+  <h1>Subjects</h1>
+  <p class="lead">What you track time on.</p>
+  <div class="form" style="padding-left:4px;border:0">
+    <div class="line">
+      <input type="text" id="s-name" placeholder="Name, like Calculus" maxlength="120">
+      <input type="text" id="s-code" placeholder="Code (optional)" maxlength="40" style="max-width:160px">
+      <button class="btn primary" id="s-add">Add</button>
+    </div>
+  </div>
+  <div class="list" id="s-list"></div>
+  <div id="s-archived"></div>
+</section>
+
+<section class="page" id="p-friends"></section>
+
+<section class="page" id="p-settings">
+  <h1>Settings</h1>
+  <div id="set-body"></div>
+</section>
+
+<section class="page help" id="p-help">
+  <h1>Help</h1>
+  <h2>Start and stop</h2>
+  <p>Choose a subject on <a href="#now">Now</a>. Or press <kbd>⌘</kbd> <kbd>Space</kbd>, type
+  <b class="verb">time</b> and the subject, and press <kbd>Return</kbd>. Type <b class="verb">time</b>
+  alone to stop.</p>
+  <table>
+    <tr><td><code class="verb">time</code></td><td>Stop, or start the last subject</td></tr>
+    <tr><td><code><span class="verb">time</span> calculus</code></td><td>Start or switch to a subject, by name, code or keyword</td></tr>
+    <tr><td><code><span class="verb">time</span> update</code></td><td>Install the newest version</td></tr>
+  </table>
+  <h2>Pomodoro</h2>
+  <p>Tick Pomodoro when you start. After the work period a tomato fills the screen:
+  <kbd>Return</kbd> takes the break, <kbd>Esc</kbd> snoozes, Skip keeps working. The break
+  lasts until you press I'm back.</p>
+  <h2>Break menu</h2>
+  <p>On a break, <kbd>Tab</kbd> opens the menu: Spotify, a note to Reminders, and Messages.
+  Turn each one on in <a href="#settings">Settings</a>.</p>
+  <h2>Friends</h2>
+  <p>Add a friend by their username. Once they accept, you see where each other is in the
+  pomodoro and can write. Messages arrive at the next break, never during work.</p>
+  <h2>Your data</h2>
+  <p>Everything is stored as text files in <span class="sel" id="h-dir">~/.timetrack</span>, and backed up
+  before every update. Nothing leaves your Mac, except Messages, which are encrypted.</p>
+  <h2>Remove</h2>
+  <p>Run <code>uninstall.sh</code> from the folder you installed from. Your data stays.</p>
+</section>
+</main>
+
+<div id="setup">
+  <div class="wrap">
+    <div class="step" data-step="0">
+      <div class="mark">🍅</div>
+      <h1>TimeTracker</h1>
+      <p class="lead">Track what you work on, and take real breaks.</p>
+      <div class="foot"><button class="btn primary big" data-next>Get started</button></div>
+    </div>
+    <div class="step" data-step="1">
+      <h1>What do you work on?</h1>
+      <p class="lead">Courses, projects, anything. Add more later.</p>
+      <div class="srows" id="o-rows"></div>
+      <p><button class="btn quiet" id="o-more" style="padding-left:0">+ Add another</button></p>
+      <div class="foot"><div class="pips"><i class="on"></i><i></i><i></i></div><span class="spacer"></span>
+        <button class="btn primary" id="o-subjects">Continue</button></div>
+    </div>
+    <div class="step" data-step="2">
+      <h1>Pomodoro</h1>
+      <p class="lead">Work for 25 minutes, then a tomato fills the screen and offers a 5-minute break.</p>
+      <div class="choice on" data-pomo="on"><span>🍅</span><div><b>On by default</b><small>You can untick it when you start</small></div></div>
+      <div class="choice" data-pomo="off"><span>⏱</span><div><b>Off by default</b><small>Just the timer</small></div></div>
+      <div class="foot"><div class="pips"><i></i><i class="on"></i><i></i></div><span class="spacer"></span>
+        <button class="btn primary" id="o-pomo">Continue</button></div>
+    </div>
+    <div class="step" data-step="3">
+      <h1>You're set</h1>
+      <p class="lead">Start from this window. Or, faster: press <kbd>⌘</kbd> <kbd>Space</kbd>, type
+      <b class="verb">time</b> and a subject, and press <kbd>Return</kbd>.</p>
+      <div class="foot"><div class="pips"><i></i><i></i><i class="on"></i></div><span class="spacer"></span>
+        <button class="btn primary" id="o-done">Start tracking</button></div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const TOKEN=new URLSearchParams(location.search).get("t")||"";
+const $=id=>document.getElementById(id);
+let S=null,H=null,SET=null,F=null,skew=0,page="now";
+
+/* ---------- plumbing ---------- */
+async function get(path){
+  const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{cache:"no-store"});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  return r.json();
+}
+async function post(path,body){
+  try{
+    const r=await fetch(path+"?t="+encodeURIComponent(TOKEN),{method:"POST",cache:"no-store",
+      headers:{"Content-Type":"application/json","X-TimeTracker-Token":TOKEN},
+      body:JSON.stringify(body||{})});
+    let j={};try{j=await r.json();}catch(e){}
+    return Object.assign({ok:!!j.ok,message:j.message||(r.ok?"":"Something went wrong")},j);
+  }catch(e){return {ok:false,message:"TimeTracker is not responding"};}
+}
+let toastT=null;
+function toast(msg,bad){
+  if(!msg)return;
+  const t=$("toast");t.textContent=msg;t.className="on"+(bad?" bad":"");
+  clearTimeout(toastT);toastT=setTimeout(()=>{t.className=bad?"bad":"";},bad?5000:2600);
+}
+function el(tag,attrs,...kids){
+  const e=document.createElement(tag);
+  for(const k in attrs||{}){
+    const v=attrs[k];
+    if(k==="class")e.className=v;
+    else if(k.startsWith("on"))e.addEventListener(k.slice(2),v);
+    else if(v===true)e.setAttribute(k,"");
+    else if(v!==false&&v!=null)e.setAttribute(k,v);
+  }
+  for(const c of kids.flat()){if(c==null||c===false)continue;
+    e.appendChild(typeof c==="string"||typeof c==="number"?document.createTextNode(String(c)):c);}
+  return e;
+}
+function hue(s){let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;return h;}
+function dot(key){return el("span",{class:"dot",style:"background:hsl("+hue(key)+",32%,56%)"});}
+function dur(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0;
+  if(s&&s<60)return s+"s";
+  return h?h+"h "+String(m).padStart(2,"0")+"m":m+"m";}
+function clock(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
+  return (h?h+":"+String(m).padStart(2,"0"):String(m))+":"+String(x).padStart(2,"0");}
+function mmss(s){s=Math.max(0,Math.round(s));return ((s/60)|0)+":"+String(s%60).padStart(2,"0");}
+function now(){return Date.now()/1000+skew;}
+// A delete that needs a second click within three seconds, in place of a
+// dialog: nothing to read, and nothing that can be confirmed by accident.
+function arm(btn,label,fn){
+  if(btn.classList.contains("armed")){btn.classList.remove("armed");fn();return;}
+  const old=btn.textContent;btn.textContent=label;btn.classList.add("armed");
+  setTimeout(()=>{if(btn.isConnected&&btn.classList.contains("armed")){
+    btn.classList.remove("armed");btn.textContent=old;}},3000);
+}
+function onEnter(input,fn){input.addEventListener("keydown",e=>{
+  if(e.key==="Enter"){e.preventDefault();fn();}});}
+
+/* ---------- router ---------- */
+function go(p){
+  if(!["now","history","subjects","friends","settings","help"].includes(p))p="now";
+  page=p;
+  for(const a of document.querySelectorAll("#nav a"))a.classList.toggle("on",a.dataset.page===p);
+  for(const s of document.querySelectorAll(".page"))s.classList.toggle("on",s.id==="p-"+p);
+  if(location.hash!=="#"+p)history.replaceState(null,"","#"+p);
+  if(p==="history")loadHistory();
+  if(p==="subjects")renderSubjects(true);
+  if(p==="settings")loadSettings();
+  if(p==="friends")loadFriends(true);
+  if(p==="now")renderNow(true);
+}
+window.ttGo=go;
+window.addEventListener("hashchange",()=>go(location.hash.slice(1)));
+
+/* ---------- state ---------- */
+let sig="";
+async function poll(){
+  try{
+    const d=await get("/api/state");
+    skew=d.now-Date.now()/1000;
+    S=d;
+    for(const v of document.querySelectorAll(".verb"))v.textContent=v.textContent.replace(/^\w+/,d.verb);
+    if(d.setup&&!SETUP.shown)setupOpen();
+    renderMini();
+    const s=JSON.stringify([d.running&&[d.running.key,d.running.start,d.running.plan],
+      d.pomodoro&&[d.pomodoro.phase,d.pomodoro.target,d.pomodoro.completed],
+      d.subjects.map(x=>[x.key,x.title,x.hidden,x.name,x.keywords])]);
+    if(s!==sig){sig=s;if(page==="now")renderNow();if(page==="subjects")renderSubjects();}
+  }catch(e){$("mini").textContent="Reconnecting…";}
+}
+function tick(){
+  if(!S)return;
+  const r=S.running;
+  if(r){const c=$("clock");if(c)c.textContent=clock(now()-r.start);}
+  const p=$("pomoline");if(p)p.replaceChildren(...pomoBits());
+  renderMini();
+}
+function renderMini(){
+  const m=$("mini");if(!S)return;
+  const r=S.running;
+  if(!r){m.replaceChildren(el("span",{},"Not tracking"));return;}
+  m.replaceChildren(el("b",{},r.title),el("span",{class:"num"},clock(now()-r.start)));
+}
+
+/* ---------- now ---------- */
+let openKey=null;
+function visible(){return (S?S.subjects:[]).filter(s=>!s.hidden&&!s.orphan);}
+function pomoBits(){
+  const p=S&&S.pomodoro;if(!p)return [];
+  const left=p.target-now(),cyc=Math.max(1,S.cycle||4),done=p.completed%cyc;
+  const t=p.phase==="WORK"?(left>0?"Work · "+mmss(left)+" left":"Work · break due")
+                          :(left>0?"Break · "+mmss(left)+" left":"Break · "+mmss(-left)+" over");
+  const pips=[];for(let i=0;i<cyc;i++)pips.push(el("i",{class:i<done?"f":""}));
+  return [t," ",...pips];
+}
+function renderNow(force){
+  const box=$("p-now");
+  if(!S){box.replaceChildren(el("p",{class:"mut"},"…"));return;}
+  // A form somebody is typing in is not torn down by a poll.
+  if(!force&&box.querySelector("input:focus"))return;
+  const r=S.running,list=visible();
+  const kids=[];
+  if(r){
+    const run=el("div",{class:"run"},
+      r.title!==r.key?el("div",{class:"code"},r.key):null,
+      el("h1",{},r.title),
+      el("div",{class:"clock",id:"clock"},clock(now()-r.start)),
+      r.plan?el("div",{class:"plan"},r.plan):null,
+      S.pomodoro?el("div",{class:"pomo",id:"pomoline"},...pomoBits()):null);
+    const acts=el("div",{class:"acts"});
+    const stopForm=el("div",{class:"stopform",hidden:true});
+    const recap=el("input",{type:"text",placeholder:"What did you get done?",maxlength:"500"});
+    const doStop=async()=>{const res=await post("/api/stop",{recap:recap.value});
+      toast(res.message,!res.ok);poll();};
+    onEnter(recap,doStop);
+    stopForm.append(recap,el("div",{class:"row-actions"},
+      el("button",{class:"btn",onclick:()=>{stopForm.hidden=true;acts.hidden=false;}},"Keep working"),
+      el("button",{class:"btn primary",onclick:doStop},"Stop")));
+    acts.append(el("button",{class:"btn primary big",onclick:()=>{
+      acts.hidden=true;stopForm.hidden=false;recap.focus();}},"Stop"));
+    run.append(acts,stopForm);
+    kids.push(run);
+    const others=list.filter(s=>s.key!==r.key);
+    if(others.length){kids.push(el("h2",{},"Switch to"));kids.push(subjectList(others,true));}
+  }else{
+    kids.push(el("div",{class:"idle"},el("h1",{},"Not tracking")));
+    if(list.length){kids.push(el("h2",{},"Start"));kids.push(subjectList(list,false));}
+    else kids.push(el("p",{class:"lead",style:"margin-top:18px"},"Add what you work on in ",
+      el("a",{href:"#subjects"},"Subjects"),"."));
+  }
+  kids.push(el("div",{class:"totals"},el("span",{},"Today",el("b",{},dur(S.today))),
+    el("span",{},"This week",el("b",{},dur(S.week)))));
+  box.replaceChildren(...kids);
+}
+function subjectList(list,switching){
+  const wrap=el("div",{class:"list"});
+  for(const s of list){
+    const row=el("div",{class:"item click"+(openKey===s.key?" open":"")},dot(s.key),
+      el("span",{class:"title"},s.title),
+      s.title!==s.key?el("span",{class:"code"},s.key):null,
+      el("span",{class:"go"},switching?"Switch":"Start"));
+    row.addEventListener("click",()=>{openKey=openKey===s.key?null:s.key;renderNow(true);});
+    wrap.append(row);
+    if(openKey===s.key)wrap.append(startForm(s,switching));
+  }
+  return wrap;
+}
+function startForm(s,switching){
+  const f=el("div",{class:"form"});
+  const recap=switching?el("input",{type:"text",maxlength:"500",
+    placeholder:"Done on "+S.running.title}):null;
+  const plan=el("input",{type:"text",placeholder:"Plan (optional)",maxlength:"500"});
+  const pomo=el("input",{type:"checkbox"});pomo.checked=!!S.pomodoro_default;
+  const go=async()=>{
+    const res=await post("/api/start",{key:s.key,plan:plan.value,recap:recap?recap.value:"",
+      pomodoro:pomo.checked});
+    if(!res.ok)toast(res.message,true);
+    openKey=null;await poll();renderNow(true);
+  };
+  for(const i of [recap,plan])if(i)onEnter(i,go);
+  if(recap)f.append(recap);
+  f.append(plan,el("div",{class:"line"},
+    el("label",{class:"check"},pomo,"Pomodoro"),el("span",{class:"spacer"}),
+    el("button",{class:"btn quiet",onclick:()=>{openKey=null;renderNow(true);}},"Cancel"),
+    el("button",{class:"btn primary",onclick:go},switching?"Switch":"Start")));
+  setTimeout(()=>(recap||plan).focus(),0);
+  return f;
+}
+
+/* ---------- history ---------- */
+let editing=null;
+async function loadHistory(){
+  try{H=await get("/api/history");}catch(e){return;}
+  if(editing)return;
+  renderHistory();
+}
+function renderHistory(){
+  const t=H.totals;
+  $("h-stats").replaceChildren(
+    el("div",{},el("span",{},"Today"),el("b",{},dur(t.today))),
+    el("div",{},el("span",{},"This week"),el("b",{},dur(t.week))),
+    el("div",{},el("span",{},"All time"),el("b",{},dur(t.all))));
+  $("h-table").replaceChildren(...(H.table.length?H.table.map(r=>el("tr",{},
+    el("td",{},r.title),el("td",{class:"n"},dur(r.today)),el("td",{class:"n"},dur(r.week)),
+    el("td",{class:"n"},dur(r.all)))):[el("tr",{},el("td",{colspan:"4",class:"mut"},"Nothing yet"))]));
+  const auto=H.sessions.filter(r=>r.note==="AUTOCLOSED");
+  $("h-flag").replaceChildren(auto.length?el("p",{class:"mut",style:"margin:14px 0 0"},
+    el("span",{class:"flag",style:"margin:0"},"●")," ",
+    auto.length===1?"One session was stopped after 8 hours. Check its end time below."
+                   :auto.length+" sessions were stopped after 8 hours. Check their end times below."):"");
+  const days={},order=[];
+  for(const r of H.sessions){const d=r.start.slice(0,10);
+    if(!days[d]){days[d]=[];order.push(d);}days[d].push(r);}
+  const box=$("h-days");box.replaceChildren();
+  if(!order.length){box.append(el("p",{class:"empty"},"No sessions yet."));return;}
+  for(const d of order){
+    const rows=days[d],total=rows.reduce((a,r)=>a+r.dur,0);
+    const g=el("div",{class:"day"},el("div",{class:"dayhead"},el("span",{},dayLabel(d)),
+      el("span",{class:"num"},dur(total))));
+    for(const r of rows)g.append(sessionRow(r));
+    box.append(g);
+  }
+}
+function dayLabel(d){
+  const t=new Date();const y=new Date(Date.now()-864e5);
+  const iso=x=>x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0");
+  if(d===iso(t))return "Today";
+  if(d===iso(y))return "Yesterday";
+  const dt=new Date(d+"T12:00:00");
+  return dt.toLocaleDateString(undefined,{weekday:"long",day:"numeric",month:"long"});
+}
+function hm(iso){return iso.slice(11,16);}
+function sessionRow(r){
+  const notes=[r.plan,r.recap].filter(Boolean).join(" → ");
+  const row=el("div",{class:"item click sess"},
+    el("span",{class:"time"},hm(r.start)+"–"+hm(r.end)),dot(r.key),
+    el("span",{class:"body"},el("span",{class:"title"},r.title,
+      r.note==="AUTOCLOSED"?el("span",{class:"flag"},"Stopped after 8h"):null,
+      r.pomodoros?el("span",{class:"mut",style:"margin-left:8px;font-size:12px"},"🍅"+r.pomodoros):null),
+      notes?el("span",{class:"notes"},notes):null),
+    el("span",{class:"meta"},dur(r.dur)));
+  row.addEventListener("click",()=>{if(r.start_ep==null||r.end_ep==null){
+    toast("This row's times can't be read, so it can't be edited here",true);return;}
+    editing=r;row.replaceWith(editForm(r));});
+  return row;
+}
+function local(ep){const d=new Date(ep*1000),p=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes());}
+function epoch(v){const t=v?new Date(v).getTime():NaN;return Number.isFinite(t)?Math.floor(t/1000):null;}
+function editForm(r){
+  const st=el("input",{type:"datetime-local",value:local(r.start_ep)});
+  const en=el("input",{type:"datetime-local",value:local(r.end_ep)});
+  const sel=el("select",{});
+  for(const c of H.choices)sel.append(el("option",{value:c.key,selected:c.key===r.key},c.title));
+  const plan=el("input",{type:"text",value:r.plan,maxlength:"500",placeholder:"Plan"});
+  const recap=el("input",{type:"text",value:r.recap,maxlength:"500",placeholder:"Done"});
+  const len=el("span",{class:"mut num",style:"font-size:12.5px"});
+  const upd=()=>{const a=epoch(st.value),b=epoch(en.value);
+    len.textContent=a==null||b==null?"":b<a?"Ends before it starts":dur(b-a);};
+  st.addEventListener("input",upd);en.addEventListener("input",upd);upd();
+  // Seconds are dropped by the fields; a start or end left alone keeps its own.
+  const keep=(v,ep)=>v===local(ep)?ep:epoch(v);
+  const sel_={start:r.start,dur:r.dur,key:r.key};
+  const save=async()=>{
+    const a=keep(st.value,r.start_ep),b=keep(en.value,r.end_ep);
+    if(a==null||b==null){toast("Enter a start and an end",true);return;}
+    const res=await post("/api/session/update",Object.assign({},sel_,{new_start:a,new_end:b,
+      new_key:sel.value,plan:plan.value,recap:recap.value}));
+    toast(res.message,!res.ok);if(res.ok){editing=null;loadHistory();}
+  };
+  const del=el("button",{class:"btn danger"},"Delete");
+  del.addEventListener("click",()=>arm(del,"Delete?",async()=>{
+    const res=await post("/api/session/delete",sel_);toast(res.message,!res.ok);
+    if(res.ok){editing=null;loadHistory();}}));
+  return el("div",{class:"form"},
+    el("div",{class:"line"},el("label",{class:"f"},"Start",st),el("label",{class:"f"},"End",en)),
+    sel,plan,recap,
+    el("div",{class:"line"},del,len,el("span",{class:"spacer"}),
+      el("button",{class:"btn quiet",onclick:()=>{editing=null;renderHistory();}},"Cancel"),
+      el("button",{class:"btn primary",onclick:save},"Save")));
+}
+
+/* ---------- subjects ---------- */
+let sEdit=null,showArchived=false;
+function renderSubjects(force){
+  if(!S)return;
+  if(!force&&document.querySelector("#p-subjects input:focus"))return;
+  const all=S.subjects.filter(s=>!s.orphan);
+  const live=all.filter(s=>!s.hidden),gone=all.filter(s=>s.hidden);
+  const box=$("s-list");box.replaceChildren();
+  if(!live.length)box.append(el("p",{class:"empty"},"No subjects yet."));
+  for(const s of live)box.append(...subjectRow(s));
+  const arch=$("s-archived");arch.replaceChildren();
+  if(gone.length){
+    arch.append(el("h2",{},el("a",{href:"#subjects",onclick:e=>{e.preventDefault();
+      showArchived=!showArchived;renderSubjects(true);}},(showArchived?"Hide":"Show")+" archived ("+gone.length+")")));
+    if(showArchived){const l=el("div",{class:"list"});for(const s of gone)l.append(...subjectRow(s));arch.append(l);}
+  }
+}
+function subjectRow(s){
+  const meta=s.sessions?dur(s.total):"";
+  const acts=el("span",{class:"row-actions hov"});
+  const row=el("div",{class:"item"+(sEdit===s.key?" open":"")},dot(s.key),
+    el("span",{class:"title"},s.title),s.title!==s.key?el("span",{class:"code"},s.key):null,
+    el("span",{class:"meta"},meta),acts);
+  const edit=el("button",{class:"btn quiet"},"Edit");
+  edit.addEventListener("click",()=>{sEdit=sEdit===s.key?null:s.key;renderSubjects(true);});
+  acts.append(edit);
+  if(s.hidden){
+    acts.append(el("button",{class:"btn quiet",onclick:()=>catPost("/api/category/hide",{key:s.key,hidden:false})},"Restore"));
+  }
+  // Something with hours logged against it is archived, not deleted: it
+  // leaves the launcher and the lists, and its history keeps its name.
+  // Delete is for a subject nothing was ever logged to, or one already
+  // archived — where it takes the name away and leaves the hours.
+  if(!s.sessions||s.hidden){
+    const del=el("button",{class:"btn quiet danger"},"Delete");
+    del.addEventListener("click",()=>arm(del,"Delete?",()=>catPost("/api/category/delete",{key:s.key})));
+    if(s.running)del.disabled=true;
+    acts.append(del);
+  }else{
+    const ar=el("button",{class:"btn quiet"},"Archive");
+    if(s.running)ar.disabled=true;
+    ar.addEventListener("click",()=>catPost("/api/category/hide",{key:s.key,hidden:true}));
+    acts.append(ar);
+  }
+  if(sEdit!==s.key)return [row];
+  const name=el("input",{type:"text",value:s.name||(s.title===s.key?s.key:s.title),maxlength:"120",placeholder:"Name"});
+  const kw=el("input",{type:"text",value:s.keywords,maxlength:"200",placeholder:"Other names to type in Spotlight, comma separated"});
+  const save=async()=>{
+    const n=name.value.trim();
+    // A subject without a code is keyed on its first name; its name column
+    // stays empty until it is renamed, so that it does not read "x – x".
+    const res=await catPost("/api/category/edit",{key:s.key,name:n===s.key?"":n,keywords:kw.value.trim()});
+    if(res.ok)sEdit=null;renderSubjects(true);
+  };
+  onEnter(name,save);onEnter(kw,save);
+  const f=el("div",{class:"form"},name,kw,el("div",{class:"line"},
+    s.title!==s.key||s.name?el("span",{class:"mut",style:"font-size:12.5px"},"Code "+s.key):null,
+    el("span",{class:"spacer"}),
+    el("button",{class:"btn quiet",onclick:()=>{sEdit=null;renderSubjects(true);}},"Cancel"),
+    el("button",{class:"btn primary",onclick:save},"Save")));
+  setTimeout(()=>name.focus(),0);
+  return [row,f];
+}
+async function catPost(path,body){
+  const res=await post(path,body);
+  toast(res.message,!res.ok);
+  await poll();renderSubjects(true);
+  return res;
+}
+// The key is what the log stores and can never change, so a code is the key
+// when there is one, and the name is the key when there is not. A name equal
+// to its own key is left out, or the launcher would read "time x – x".
+function subjectBody(name,code){
+  name=name.trim();code=code.trim();
+  if(!code)return {key:name,name:"",keywords:""};
+  return {key:code,name:name===code?"":name,keywords:""};
+}
+async function addSubject(){
+  const n=$("s-name").value,c=$("s-code").value;
+  if(!n.trim()&&!c.trim()){$("s-name").focus();return;}
+  const res=await catPost("/api/category/add",subjectBody(n||c,c));
+  if(res.ok){$("s-name").value="";$("s-code").value="";$("s-name").focus();}
+}
+$("s-add").addEventListener("click",addSubject);
+onEnter($("s-name"),addSubject);onEnter($("s-code"),addSubject);
+
+/* ---------- friends ---------- */
+async function loadFriends(){
+  const box=$("p-friends");
+  box.replaceChildren(el("h1",{},"Friends"),el("p",{class:"lead"},"Coming in the next step."));
+}
+
+/* ---------- settings ---------- */
+const LABELS={
+  pomodoro_default:["Pomodoro on by default"],
+  pomodoro_minutes:["Work","min"],break_minutes:["Short break","min"],
+  long_break_minutes:["Long break","min"],long_break_every:["Long break after every",""],
+  snooze_minutes:["Snooze","min"],auto_accept_seconds:["Take the break by itself after","s"],
+  sound:["Sound when the tomato appears"],pause_media:["Pause music and video on a break"],
+  key_menu:["Menu"],key_spotify:["Spotify"],key_reminder:["Note"],key_chat:["Messages"],
+  easter_egg:["Tomato game"],
+  spotify:["Spotify in the break menu"],spotify_resume_work:["Play the work playlist after a break"],
+  spotify_pause_on_overrun:["Pause music when a break runs over"],
+  reminders:["Notes in the break menu"],
+  paint_calendar:["Copy sessions to a calendar"],paint_days:["Keep in sync for","days"],
+  paint_min_minutes:["Skip sessions shorter than","min"],
+};
+async function loadSettings(){
+  try{SET=await get("/api/settings");}catch(e){return;}
+  if(document.querySelector("#p-settings input:focus"))return;
+  renderSettings();
+}
+function setRow(s){
+  const L=LABELS[s.key]||[s.key];
+  const ok=el("span",{class:"saved"},"Saved");
+  const save=async(v,input)=>{
+    const res=await post("/api/setconf",{changes:{[s.key]:v}});
+    if(!res.ok){toast(res.message,true);input.value=s.value;if(input.type==="checkbox")input.checked=s.value==="on";return;}
+    s.value=v;ok.classList.add("on");setTimeout(()=>ok.classList.remove("on"),1400);
+    if(s.key==="spotify"||s.key==="reminders"||s.key==="paint_calendar")renderSettings();
+  };
+  let field;
+  if(s.kind==="onoff"){
+    const i=el("input",{type:"checkbox"});i.checked=s.value==="on";
+    i.addEventListener("change",()=>save(i.checked?"on":"off",i));
+    field=el("label",{class:"toggle"},i,el("span",{}));
+  }else if(s.kind==="number"){
+    const i=el("input",{type:"number",min:s.min,max:s.max,step:s.step,value:s.value});
+    i.addEventListener("change",()=>{if(i.value!==s.value)save(i.value,i);});
+    onEnter(i,()=>i.blur());
+    field=el("span",{class:"row-actions"},i,el("span",{class:"unit"},L[1]||""));
+  }else{
+    const i=el("input",{type:"text",class:"key",maxlength:"5",value:s.value});
+    i.addEventListener("change",()=>{if(i.value!==s.value)save(i.value,i);});
+    onEnter(i,()=>i.blur());
+    field=i;
+  }
+  return el("div",{class:"set"},el("span",{class:"lbl"},L[0]),ok,field);
+}
+function renderSettings(){
+  const by={};for(const s of SET.settings)by[s.key]=s;
+  const rows=keys=>keys.filter(k=>by[k]).map(k=>setRow(by[k]));
+  const on=k=>by[k]&&by[k].value==="on";
+  const out=[];
+  out.push(el("h2",{},"Pomodoro"),el("div",{class:"list"},...rows(["pomodoro_default","pomodoro_minutes",
+    "break_minutes","long_break_minutes","long_break_every","snooze_minutes","auto_accept_seconds",
+    "sound","pause_media"])));
+  out.push(el("h2",{},"Keys on the break screen"),el("div",{class:"list"},
+    ...rows(["key_menu","key_spotify","key_reminder","key_chat"]),
+    ...(SET.found?rows(["easter_egg"]):[])));
+  // Spotify
+  const sp=[...rows(["spotify"])];
+  if(on("spotify")){
+    sp.push(...rows(["spotify_resume_work","spotify_pause_on_overrun"]));
+    for(const p of SET.playlists){
+      const del=el("button",{class:"btn quiet danger"},"Remove");
+      del.addEventListener("click",()=>arm(del,"Remove?",()=>listPost("/api/playlist/delete",{uri:p.uri})));
+      sp.push(el("div",{class:"item"},dot(p.name),el("span",{class:"title"},p.name),
+        p.work?el("span",{class:"code"},"Work"):null,
+        el("span",{class:"row-actions hov"},
+          el("button",{class:"btn quiet",onclick:()=>listPost("/api/playlist/work",{uri:p.work?"-":p.uri})},
+            p.work?"Not for work":"Use for work"),del)));
+    }
+    const pn=el("input",{type:"text",placeholder:"Playlist name",maxlength:"60"});
+    const pu=el("input",{type:"text",placeholder:"Link from Spotify: Share → Copy link",maxlength:"300"});
+    const add=async()=>{const r=await listPost("/api/playlist/add",{name:pn.value.trim(),uri:pu.value.trim()});
+      if(r.ok){pn.value="";pu.value="";}};
+    onEnter(pu,add);onEnter(pn,()=>pu.focus());
+    sp.push(el("div",{class:"form",style:"padding-left:4px"},el("div",{class:"line"},pn,pu,
+      el("button",{class:"btn",onclick:add},"Add"))));
+    sp.push(grantRow("spotify","Allow TimeTracker to control Spotify"));
+  }
+  out.push(el("h2",{},"Spotify"),el("div",{class:"list"},...sp));
+  // Reminders
+  const rm=[...rows(["reminders"])];
+  if(on("reminders")){
+    const ln=el("input",{type:"text",value:SET.reminders_list,maxlength:"60",style:"width:220px"});
+    const ok=el("span",{class:"saved"},"Saved");
+    ln.addEventListener("change",async()=>{const r=await post("/api/reminders/list",{name:ln.value.trim()});
+      if(!r.ok)toast(r.message,true);else{ok.classList.add("on");setTimeout(()=>ok.classList.remove("on"),1400);}});
+    onEnter(ln,()=>ln.blur());
+    rm.push(el("div",{class:"set"},el("span",{class:"lbl"},"List"),ok,ln));
+    rm.push(grantRow("reminders","Allow access to Reminders"));
+  }
+  out.push(el("h2",{},"Reminders"),el("div",{class:"list"},...rm));
+  // Calendar
+  const cal=[...rows(["paint_calendar"])];
+  if(on("paint_calendar")){
+    const sel=el("select",{});
+    sel.append(el("option",{value:""},SET.paint_choices.length?"None":"Press Refresh"));
+    let found=false;
+    for(const c of SET.paint_choices){
+      const o=el("option",{value:c.title},c.source?c.title+" ("+c.source+")":c.title);
+      if(c.title===SET.paint_calendar){o.selected=true;found=true;}sel.append(o);}
+    if(SET.paint_calendar&&!found)sel.append(el("option",{value:SET.paint_calendar,selected:true},SET.paint_calendar+" (not found)"));
+    sel.addEventListener("change",async()=>{const r=await post("/api/paint/calendar",{name:sel.value});toast(r.message,!r.ok);});
+    const ref=el("button",{class:"btn quiet"},"Refresh");
+    ref.addEventListener("click",async()=>{ref.disabled=true;ref.textContent="Asking…";
+      const r=await post("/api/paint/refresh",{});toast(r.message,!r.ok);loadSettings();});
+    cal.push(el("div",{class:"set"},el("span",{class:"lbl"},"Calendar",
+      el("small",{},"Use an empty calendar of its own: its recent events are rewritten to match your log.")),ref,sel));
+    cal.push(...rows(["paint_days","paint_min_minutes"]));
+  }
+  out.push(el("h2",{},"Calendar"),el("div",{class:"list"},...cal));
+  // About
+  const up=el("button",{class:"btn"},"Check for updates");
+  const upline=el("span",{class:"mut",style:"font-size:12.5px"});
+  up.addEventListener("click",()=>checkUpdate(up,upline));
+  out.push(el("h2",{},"TimeTracker"),el("div",{class:"list"},
+    el("div",{class:"set"},el("span",{class:"lbl"},"Version "+SET.version,upline),up),
+    el("div",{class:"set"},el("span",{class:"lbl"},"Your data",
+      el("small",{},SET.data_dir+(SET.backups.count?" · backed up before every update":""))),
+      el("button",{class:"btn",onclick:()=>post("/api/open/data",{})},"Show in Finder"))));
+  $("set-body").replaceChildren(...out);
+}
+function grantRow(tool,label){
+  const b=el("button",{class:"btn"},"Allow");
+  b.addEventListener("click",async()=>{const r=await post("/api/grant",{tool});toast(r.message,!r.ok);});
+  return el("div",{class:"set"},el("span",{class:"lbl"},label,
+    el("small",{},"macOS asks once. Answering now keeps it out of your break.")),b);
+}
+async function listPost(path,body){
+  const r=await post(path,body);toast(r.message,!r.ok);await loadSettings();return r;
+}
+async function checkUpdate(btn,line){
+  btn.disabled=true;line.textContent=" · Checking…";
+  const r=await post("/api/update/check",{});
+  btn.disabled=false;
+  if(!r.ok){line.textContent=" · "+r.message;return;}
+  if(!newer(r.latest,r.installed)){line.textContent=" · Up to date";return;}
+  line.textContent=" · "+r.latest+" is available";
+  btn.textContent="Update to "+r.latest;btn.classList.add("primary");
+  btn.onclick=async()=>{
+    if(S&&S.pomodoro){toast("Update when the pomodoro has ended",true);return;}
+    btn.disabled=true;btn.textContent="Updating…";line.textContent=" · TimeTracker restarts when it is done";
+    const u=await post("/api/update/run",{});if(!u.ok){toast(u.message,true);btn.disabled=false;}
+  };
+}
+function newer(a,b){const x=String(a).split("."),y=String(b).split(".");
+  for(let i=0;i<3;i++){const p=+x[i]||0,q=+y[i]||0;if(p!==q)return p>q;}return false;}
+
+/* ---------- first run ---------- */
+const SETUP={shown:false,step:0,pomo:"on"};
+function setupOpen(){SETUP.shown=true;$("setup").classList.add("on");setupStep(0);
+  const rows=$("o-rows");rows.replaceChildren();for(let i=0;i<3;i++)addSetupRow();}
+function setupStep(n){SETUP.step=n;
+  for(const s of document.querySelectorAll("#setup .step"))s.classList.toggle("on",+s.dataset.step===n);
+  const f=document.querySelector('#setup .step.on input');if(f)setTimeout(()=>f.focus(),0);}
+function addSetupRow(){
+  const n=el("input",{type:"text",placeholder:"Name",maxlength:"120"});
+  const c=el("input",{type:"text",placeholder:"Code (optional)",maxlength:"40"});
+  onEnter(n,()=>c.focus());
+  onEnter(c,()=>{
+    const i=[...document.querySelectorAll("#o-rows input")].indexOf(c);
+    const after=()=>[...document.querySelectorAll("#o-rows input")][i+1];
+    if(!after())addSetupRow();
+    after().focus();
+  });
+  $("o-rows").append(el("div",{class:"srow2"},n,c));
+}
+document.querySelector("#setup [data-next]").addEventListener("click",()=>setupStep(1));
+$("o-more").addEventListener("click",()=>{addSetupRow();const a=document.querySelectorAll("#o-rows .srow2");
+  a[a.length-1].querySelector("input").focus();});
+$("o-subjects").addEventListener("click",async()=>{
+  const b=$("o-subjects");b.disabled=true;
+  for(const r of document.querySelectorAll("#o-rows .srow2")){
+    const [n,c]=r.querySelectorAll("input");
+    if(!n.value.trim()&&!c.value.trim())continue;
+    const res=await post("/api/category/add",subjectBody(n.value||c.value,c.value));
+    if(!res.ok){toast(res.message,true);b.disabled=false;return;}
+    r.remove();
+  }
+  b.disabled=false;setupStep(2);
+});
+for(const ch of document.querySelectorAll("#setup .choice"))ch.addEventListener("click",()=>{
+  SETUP.pomo=ch.dataset.pomo;
+  for(const x of document.querySelectorAll("#setup .choice"))x.classList.toggle("on",x===ch);});
+$("o-pomo").addEventListener("click",async()=>{
+  const r=await post("/api/setconf",{changes:{pomodoro_default:SETUP.pomo}});
+  if(!r.ok){toast(r.message,true);return;}setupStep(3);});
+$("o-done").addEventListener("click",async()=>{
+  const r=await post("/api/setup/done",{});
+  if(!r.ok){toast(r.message,true);return;}
+  $("setup").classList.remove("on");await poll();go("now");});
+
+/* ---------- start ---------- */
+go(location.hash.slice(1)||"now");
+poll();
+setInterval(poll,2000);
+setInterval(tick,1000);
+setInterval(()=>{if(page==="history"&&!editing)loadHistory();},10000);
+setInterval(()=>{if(page==="friends")loadFriends();},5000);
+</script>
+</body></html>

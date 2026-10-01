@@ -5,6 +5,7 @@
 #   action.sh stop [recap] [at_epoch]
 #   action.sh plan <text>                    (attach intent to a running timer)
 #   action.sh addcat <key> <name> <keywords>
+#   action.sh editcat <key> <name> <keywords> (rename; keeps last used and hidden)
 #   action.sh hidecat <key> on|off           (keep the history, drop the app)
 #   action.sh delcat <key>                   (row moves to categories.deleted.tsv)
 #   action.sh editsession <sel_start_iso> <sel_dur> <sel_key> \
@@ -224,6 +225,25 @@ add_category() {
             print
         }
         END { if (!seen) print k, n, kw, now }
+    ' "$CAT_FILE" > "$tmp"
+    mv -f "$tmp" "$CAT_FILE"
+}
+
+# A rename. addcat would do the same to an existing key, and also stamp it as
+# used now — which is what plain "time" reads to decide what to start next, so
+# fixing a typo in a course you have not touched all term would make it the
+# one that starts tomorrow morning.
+edit_category() {
+    local key="$1" name="$2" keywords="$3" tmp
+    tmp="$(mktemp "$DATA_DIR/.categories.XXXXXX")"
+    TT_K="$key" TT_N="$name" TT_KW="$keywords" \
+    awk -F'\t' -v OFS='\t' -v hdr="$CAT_HEADER" '
+        BEGIN { k=ENVIRON["TT_K"]; n=ENVIRON["TT_N"]; kw=ENVIRON["TT_KW"] }
+        NR==1 { print hdr; next }
+        NF>=4 && $1!="" && $4 ~ /^[0-9]+$/ {
+            if ($1==k) { $2=n; $3=kw }
+            print
+        }
     ' "$CAT_FILE" > "$tmp"
     mv -f "$tmp" "$CAT_FILE"
 }
@@ -494,6 +514,17 @@ case "$query" in
             action_msg="Key cannot be empty"
         else
             add_category "$key" "$name" "$keywords" "$now"
+            action_msg="Added $(label "$key")"
+        fi
+        ;;
+    editcat)
+        key=$(sanitize_field "${2:-}")
+        name=$(sanitize_field "${3:-}")
+        keywords=$(sanitize_field "${4:-}")
+        if [[ -z "$key" ]] || ! cat_exists "$key"; then
+            action_msg="Unknown subject ${key:-(empty)}" ; action_rc=1
+        else
+            edit_category "$key" "$name" "$keywords"
             action_msg="Saved $(label "$key")"
         fi
         ;;

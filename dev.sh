@@ -183,7 +183,11 @@ running() {
     pgrep -f "^$(q "$bin")/pomodoro-watch\.sh" >/dev/null 2>&1 && printf ' watcher'
     pgrep -f "^$(q "$apps")/TimeTracker Prompt\.app/Contents/MacOS/ttprompt overlay" \
         >/dev/null 2>&1 && printf ' overlay'
-    pgrep -f "^/usr/bin/python3 $(q "$bin")/dashboard\.py" >/dev/null 2>&1 && printf ' dashboard'
+    # /usr/bin/python3 is a shim that execs the real interpreter, so the server
+    # shows up under the interpreter's path, not the one it was started with.
+    pgrep -f " $(q "$bin")/dashboard\.py( |$)" >/dev/null 2>&1 && printf ' server'
+    pgrep -f "^$(q "$apps")/TimeTracker[^/]*\.app/Contents/MacOS/ttapp" \
+        >/dev/null 2>&1 && printf ' app'
     pgrep -f "^$(q "$apps")/TimeTracker Chat\.app/Contents/MacOS/ttchat break" \
         >/dev/null 2>&1 && printf ' chat'
     return 0

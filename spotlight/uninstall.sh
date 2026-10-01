@@ -67,6 +67,13 @@ rm -f "$DATA_DIR/.calendar-events.tsv" "$DATA_DIR/.calendar-handled" \
 if [[ -d "$APPS_DIR" ]]; then
     for app_path in "$APPS_DIR"/*.app; do
         [[ -e "$app_path" ]] || continue
+        # The app, if it is open, is asked to quit by its own identity —
+        # this install's, read off the bundle, never the other install's.
+        bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            "$app_path/Contents/Info.plist" 2>/dev/null) || bid=""
+        if [[ "$bid" == *.timetracker*.app ]]; then
+            osascript -e "tell application id \"$bid\" to quit" >/dev/null 2>&1 || true
+        fi
         "$LSREGISTER" -u "$app_path" >/dev/null 2>&1
     done
     rm -rf "$APPS_DIR"

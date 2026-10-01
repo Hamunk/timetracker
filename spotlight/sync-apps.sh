@@ -205,9 +205,6 @@ EOF
 # --- Fixed control apps -----------------------------------------------------
 
 make_app "$VERB" "toggle" 'exec "$BIN/toggle.sh"' > /dev/null
-make_app "$VERB new" "new" 'exec "$BIN/newcat.sh"' > /dev/null
-make_app "$VERB categories" "categories" \
-    'exec /usr/bin/open -t "${TIMETRACK_DIR:-$HOME/.timetrack}/categories.tsv"' > /dev/null
 
 # The data folder is a dotfolder, so Finder hides it. This is the shortcut.
 make_app "$VERB data" "data" \
@@ -218,22 +215,28 @@ if [[ -f "$BIN_DIR/update.sh" ]]; then
     make_app "$VERB update" "update" 'exec "$BIN/update.sh"' > /dev/null
 fi
 
-# Detached, not exec'd: if the app process *is* the server it stays alive while
-# the browser polls, and LaunchServices then refuses to relaunch the app.
-make_app "$VERB dashboard" "dashboard" \
-    'nohup /usr/bin/python3 "$BIN/dashboard.py" >/dev/null 2>&1 &
-exit 0' > /dev/null
-
-# Same detached body — the server reuses a running instance — but lands the
-# browser on the settings page.
-make_app "$VERB settings" "settings" \
-    'nohup /usr/bin/python3 "$BIN/dashboard.py" --settings >/dev/null 2>&1 &
-exit 0' > /dev/null
-
-# And the guide, the same way.
-make_app "$VERB guide" "guide" \
-    'nohup /usr/bin/python3 "$BIN/dashboard.py" --guide >/dev/null 2>&1 &
-exit 0' > /dev/null
+# Verbs that open the app on one of its pages. The app takes the page from a
+# file rather than from its arguments, because `open` hands arguments only to
+# an app that is starting, and these have to work on one that is already
+# open. Without the app (no compiler, so none was built) the same page opens
+# in the browser instead, detached so this bundle is not still running when
+# it is asked for again.
+#
+# "new" and "categories" were three dialogs asking for a key, a name and
+# keywords, and a TSV file opened in TextEdit. The app's Subjects page does
+# both, for anyone.
+APP_NAME="TimeTracker"
+[[ "$VERB" == "time" ]] || APP_NAME="TimeTracker $VERB"
+for pair in dashboard:history settings:settings guide:help new:subjects categories:subjects; do
+    word="${pair%%:*}" page="${pair#*:}"
+    make_app "$VERB $word" "$word" "$(printf 'APP=%q
+if [[ -d "$APP" ]]; then
+    printf %%s\\\\n %q > "${TIMETRACK_DIR:-$HOME/.timetrack}/.app-page"
+    exec /usr/bin/open "$APP"
+fi
+nohup /usr/bin/python3 "$BIN/dashboard.py" --page %q >/dev/null 2>&1 &
+exit 0' "$APPS_DIR/$APP_NAME.app" "$page" "$page")" > /dev/null
+done
 
 
 # Not a Spotlight verb like the rest — a bundle whose only purpose is to be

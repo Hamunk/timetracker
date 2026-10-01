@@ -38,7 +38,7 @@ RUNTIME = ("action.sh", "start.sh", "toggle.sh", "newcat.sh", "settings.sh",
            "pomodoro-watch.sh", "paint-calendar.sh", "spotify.sh",
            "pause-media.sh", "notify.sh", "prompt.sh",
            "dashboard.py", "migrate.py", "migrate_v2.py", "update.sh",
-           "ttprompt", "ttpaint", "ttremind", "ttchat")
+           "ttprompt", "ttpaint", "ttremind", "ttchat", "ttapp")
 
 # Commands that change what they are pointed at. Every argument is a target,
 # so naming the real install anywhere in one is enough.

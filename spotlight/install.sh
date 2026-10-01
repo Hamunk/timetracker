@@ -111,17 +111,18 @@ install_file() {
     chmod "$3" "$tmp"
     mv -f "$tmp" "$BIN_DIR/$2"
 }
-for f in action.sh notify.sh toggle.sh newcat.sh sync-apps.sh prompt.sh start.sh \
+for f in action.sh notify.sh toggle.sh sync-apps.sh prompt.sh start.sh \
          settings.sh pomodoro-watch.sh pause-media.sh spotify.sh \
          paint-calendar.sh update.sh; do
     install_file "$SRC_DIR/$f" "$f" 755
 done
-for f in dashboard.py migrate.py; do
+for f in dashboard.py migrate.py app.html; do
     install_file "$SRC_DIR/$f" "$f" 644
 done
 install_file "$SRC_DIR/../VERSION" VERSION 644
-# Gone in 2.0: its example seed is gone, and the rest of it is migrate.py.
-rm -f "$BIN_DIR/migrate_v2.py"
+# Gone in 2.0. The first's example seed went with it, and the rest of it is
+# migrate.py; the second's three dialogs are the app's Subjects page.
+rm -f "$BIN_DIR/migrate_v2.py" "$BIN_DIR/newcat.sh"
 
 # --- retire the calendar auto-start ------------------------------------------
 # It read the calendar and started timers off a lecture already under way. It
@@ -403,45 +404,108 @@ EOF
         mv "$CSTAGE_APP" "$APPS_DIR/"
         rm -rf "$CSTAGE"
     fi
+    # --- the app -------------------------------------------------------------
+    # The window: everything the launcher does, as buttons. A regular app,
+    # with a Dock icon, because it is the one bundle here meant to be found
+    # and opened by somebody who has never heard of the launcher. A scratch
+    # install's carries its verb in its name, so the two are told apart in
+    # the Dock as well as in Spotlight.
+    #
+    # Its environment is a file in Resources, written before signing, since
+    # nothing may write into the bundle after. A changed environment is a
+    # reason to rebuild, the same as a changed source.
+    APP_NAME="TimeTracker"
+    [[ "$VERB" == "time" ]] || APP_NAME="TimeTracker $VERB"
+    MAIN_APP="$APPS_DIR/$APP_NAME.app"
+    MAIN_BIN="$MAIN_APP/Contents/MacOS/ttapp"
+    APP_ENV=$(printf 'TT_BIN=%s\nTIMETRACK_DIR=%s\nTIMETRACK_APPS_DIR=%s\nTIMETRACK_VERB=%s\nTIMETRACK_BID_PREFIX=%s\n' \
+        "$BIN_DIR" "$DATA_DIR" "$APPS_DIR" "$VERB" "$BID_PREFIX")
+    if [[ ! -x "$MAIN_BIN" || "$SRC_DIR/ttapp.swift" -nt "$MAIN_BIN" \
+          || $(bundle_id_of "$MAIN_APP") != "$BID_PREFIX.app" \
+          || "$(cat "$MAIN_APP/Contents/Resources/env" 2>/dev/null)" != "$APP_ENV" \
+          || $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+               "$MAIN_APP/Contents/Info.plist" 2>/dev/null) != "$NEW_VERSION" ]]; then
+        printf 'Building %s...\n' "$APP_NAME"
+        ASTAGE="$APPS_DIR/.app-build.$$"
+        rm -rf "$ASTAGE"
+        ASTAGE_APP="$ASTAGE/$APP_NAME.app"
+        mkdir -p "$ASTAGE_APP/Contents/MacOS" "$ASTAGE_APP/Contents/Resources"
+        swiftc -O "$SRC_DIR/ttapp.swift" -o "$ASTAGE_APP/Contents/MacOS/ttapp"
+        printf '%s\n' "$APP_ENV" > "$ASTAGE_APP/Contents/Resources/env"
+        if "$ASTAGE_APP/Contents/MacOS/ttapp" --icon "$ASTAGE/AppIcon.iconset" 2>/dev/null; then
+            iconutil -c icns "$ASTAGE/AppIcon.iconset" \
+                -o "$ASTAGE_APP/Contents/Resources/AppIcon.icns" 2>/dev/null || true
+        fi
+        cat > "$ASTAGE_APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>$APP_NAME</string>
+	<key>CFBundleDisplayName</key>
+	<string>$APP_NAME</string>
+	<key>CFBundleExecutable</key>
+	<string>ttapp</string>
+	<key>CFBundleIdentifier</key>
+	<string>$BID_PREFIX.app</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$NEW_VERSION</string>
+	<key>CFBundleVersion</key>
+	<string>$NEW_VERSION</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
+EOF
+        codesign --force -s - "$ASTAGE_APP" >/dev/null 2>&1 || \
+            printf 'warning: could not ad-hoc sign %s\n' "$APP_NAME"
+        rm -rf "$MAIN_APP"
+        mv "$ASTAGE_APP" "$APPS_DIR/"
+        rm -rf "$ASTAGE"
+    fi
 else
-    printf 'swiftc not found. The tracker is installed; pomodoro mode needs\n'
-    printf 'the compiled helper and is not offered without it.\n'
-    printf 'To enable it: xcode-select --install, then re-run this script.\n'
+    printf 'swiftc not found. The tracker is installed, but the app and\n'
+    printf 'pomodoro mode need it: xcode-select --install, then install again.\n'
 fi
 
-# A running dashboard loaded dashboard.py once, at startup, and "time
-# settings" deliberately reuses an existing server rather than starting a
-# second one — so after an upgrade the old code goes on being served until it
-# times out. It holds nothing but a port and a token, so stopping it is free
-# and the next launch starts fresh on the code just installed.
+# A running server loaded dashboard.py once, at startup, so after an upgrade
+# it would go on serving the old code. It holds nothing but a port and a
+# token, so stopping it is free. The app notices its server go and starts
+# the new one, or, when this install changed the version, reopens as the new
+# app.
 if pkill -f "$BIN_DIR/dashboard.py" 2>/dev/null; then
     rm -f "$DATA_DIR/.dashboard"
-    printf 'Stopped the running dashboard so it picks up this version.\n'
 fi
 
 "$BIN_DIR/sync-apps.sh"
 
-cat <<EOF
+printf '\nInstalled TimeTracker %s.\n' "$NEW_VERSION"
 
-Installed.
-
-  scripts:  $BIN_DIR
-  apps:     $APPS_DIR
-
-  Cmd+Space, "$VERB guide", Enter    the guide
-  Cmd+Space, "$VERB settings", Enter  the settings
-EOF
-
-# First run: no setup marker and no categories. Open the setup page, which
-# walks through categories, the pomodoro choice and the three permissions.
-# Through the dashboard bundle rather than dashboard.py directly, so the
-# browser tab it opens is attributed to the same app as every other time.
+# First run: no setup marker and no categories. The app opens on its setup,
+# which asks what you work on and whether you want pomodoros.
 first_run=0
 [[ -f "$DATA_DIR/.setup-done" ]] || first_run=1
 if (( first_run )) && [[ "$(awk 'NR>1 && NF' "$DATA_DIR/categories.tsv" | wc -l)" -gt 0 ]]; then
     first_run=0
 fi
-if (( first_run )) && [[ -d "$APPS_DIR/$VERB dashboard.app" ]]; then
-    printf '\nOpening the setup page in your browser.\n'
+if (( first_run )) && [[ -n "${MAIN_APP:-}" && -d "$MAIN_APP" ]]; then
+    /usr/bin/open "$MAIN_APP" >/dev/null 2>&1 || true
+elif (( first_run )) && [[ -d "$APPS_DIR/$VERB dashboard.app" ]]; then
     /usr/bin/open -g "$APPS_DIR/$VERB dashboard.app" >/dev/null 2>&1 || true
 fi
