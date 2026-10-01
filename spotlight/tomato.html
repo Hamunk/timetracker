@@ -409,13 +409,18 @@ font-variant-numeric:tabular-nums;transition:transform .09s ease}
 #score.pop{transform:scale(1.05)}
 #rate{font-size:1.6vh;letter-spacing:.34em;text-transform:uppercase;opacity:.42;
 font-variant-numeric:tabular-nums}
-/* The score is always every digit. Past nine of them the font steps down so
-   the number stays on one line at any total the day can reach. */
-#score.d10{font-size:7vh}
-#score.d13{font-size:5.4vh}
-#score.d16{font-size:4.2vh}
 #best{font-size:1.4vh;letter-spacing:.1em;text-transform:uppercase;opacity:.34;
-font-variant-numeric:tabular-nums;margin-top:.3vh}
+font-variant-numeric:tabular-nums;margin-top:.3vh;cursor:pointer;
+transition:opacity .15s ease}
+#best:hover{opacity:.7}
+/* Today's growth: one line over the day, drawn when asked for and gone again.
+   No axes to read, only where the day began, now, and the top. */
+#chart{width:56vh;margin-top:1.4vh;position:relative}
+#chart svg{display:block;width:100%;height:16vh;overflow:visible}
+#chart .lab{display:flex;justify-content:space-between;font-size:1.25vh;
+letter-spacing:.08em;opacity:.4;margin-top:.6vh;font-variant-numeric:tabular-nums}
+#chart .top{position:absolute;left:0;top:-.2vh;font-size:1.25vh;opacity:.4;
+font-variant-numeric:tabular-nums}
 #away{margin-top:1vh;font-size:1.9vh;color:#ffcf72;opacity:0;
 transform:translateY(-.6vh);transition:opacity .5s ease,transform .5s ease}
 #away.on{opacity:.9;transform:translateY(0)}
@@ -461,7 +466,9 @@ font-variant-numeric:tabular-nums}
 gap:2.6vh;padding:2.6vh 3.4vh;font-size:1.7vh;opacity:.42;
 letter-spacing:.06em;pointer-events:none}
 #gclock{font-variant-numeric:tabular-nums}
-#greset{margin-left:auto;pointer-events:auto;cursor:pointer;
+#ggraph{margin-left:auto;pointer-events:auto;cursor:pointer;transition:opacity .15s ease}
+#ggraph:hover{opacity:1}
+#greset{pointer-events:auto;cursor:pointer;
 transition:opacity .15s ease,color .15s ease}
 #greset:hover{opacity:1}
 #greset.confirm{opacity:1;color:#ff9d8a}
@@ -648,12 +655,22 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
   <div id="gwrap">
     <div id="score">0</div>
     <div id="rate"></div>
-    <div id="best"></div>
+    <div id="best" title="Today's growth"></div>
+    <div id="chart" hidden><span class="top" id="ctop"></span>
+      <svg viewBox="0 0 100 40" preserveAspectRatio="none">
+        <path id="carea" fill="rgba(229,72,77,.16)" stroke="none"/>
+        <path id="cline" fill="none" stroke="#e5484d" stroke-width="1.2"
+          vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+        <line x1="0" y1="40" x2="100" y2="40" stroke="rgba(255,255,255,.15)"
+          vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="lab"><span id="cfrom"></span><span>now</span></div></div>
     <div id="away"></div>
     <div id="tomwrap"><div id="glow"></div><div id="gtom">🍅</div></div>
   </div>
   <div id="shop"></div>
   <div id="gfoot"><span id="gclock"></span><span id="glife"></span>
+    <span id="ggraph"><kbd>g</kbd>graph</span>
     <span id="greset"><kbd>r</kbd><span id="greset-label">reset</span></span>
     <span id="gback"><kbd>esc</kbd>back</span></div>
 </div>
@@ -894,6 +911,7 @@ document.addEventListener("keydown",e=>{
   if(G.on){
     if(e.key==="Escape"||e.key==="Enter"){e.preventDefault();closeGame();return;}
     if(e.key==="r"||e.key==="R"){e.preventDefault();resetArm();}
+    if(e.key==="g"||e.key==="G"){e.preventDefault();toggleChart();}
     return;
   }
   if(!view)return;
@@ -1614,8 +1632,8 @@ function resCost(it,i){return Math.ceil(it.c*20*Math.pow(5,i));}
 function resLevel(it){return G.up[it.k]||0;}
 const SAVE="tt-tomato-clicker";
 const G={on:false,n:0,earned:0,clicks:0,ps:0,click:1,own:{},up:{},found:false,parts:[],
-  raf:0,last:0,s:0,sv:0,gold:null,goldAt:0,saveAt:0,shopAt:0,
-  away:0,awaySecs:0,day:null,
+  raf:0,last:0,s:0,sv:0,gold:null,goldAt:0,saveAt:0,shopAt:0,pointAt:0,
+  away:0,awaySecs:0,day:null,taps:[],graph:false,
   at:Date.now()/1000};   // wall clock through which growth has been paid
 let popT=null;
 
@@ -1640,6 +1658,28 @@ function hload(){
 }
 function hsave(){try{localStorage.setItem(HSAVE,JSON.stringify(HIST));}catch(e){}}
 
+/* ---- today's growth ----------------------------------------------------------
+   What the day grew, as points of (time, grown so far), for the graph behind
+   "g". A point is kept at either end of every stretch paid for by accrue() —
+   growth there is the garden's rate times the time, a straight line, and two
+   points draw it exactly — and every ten seconds of play, which is where the
+   clicking is. At most four hundred: past that every other old point goes,
+   which thins the morning and keeps the shape. */
+const SSAVE="tt-tomato-series";
+let SER={day:null,pts:[]};
+function sload(){
+  try{SER=JSON.parse(localStorage.getItem(SSAVE)||"null")||SER;}catch(e){}
+  if(!SER||!Array.isArray(SER.pts))SER={day:null,pts:[]};
+}
+function ssave(){try{localStorage.setItem(SSAVE,JSON.stringify(SER));}catch(e){}}
+function spoint(t,v){
+  if(SER.day!==G.day)SER={day:G.day,pts:[]};
+  const last=SER.pts[SER.pts.length-1];
+  if(last&&last[0]>=t){last[1]=Math.max(last[1],v);return;}
+  SER.pts.push([Math.round(t),Math.floor(v)]);
+  if(SER.pts.length>400)SER.pts=SER.pts.filter((p,i,a)=>i%2===0||i===a.length-1);
+}
+
 // Files the outgoing day into the leaderboard (only if anything was actually
 // grown that day — a day never opened shouldn't show up as a zero) and
 // starts the garden over. Shared by the midnight rollover and the manual
@@ -1648,6 +1688,7 @@ function hsave(){try{localStorage.setItem(HSAVE,JSON.stringify(HIST));}catch(e){
 function rollDay(day){
   if(G.earned>0){HIST[day]=Math.max(HIST[day]||0,Math.floor(G.earned));hsave();recalcBest();}
   G.n=0;G.earned=0;G.clicks=0;G.own={};G.up={};G.click=1;recalc();
+  SER={day:null,pts:[]};ssave();
 }
 
 // Growth is owed for elapsed time, not for frames drawn. Nothing of ours
@@ -1676,6 +1717,9 @@ function accrue(){
   G.at=now;
   if(!G.ps||!secs)return 0;
   const grew=G.ps*secs;
+  // A real stretch — a work period, a walk away — is one straight line on
+  // the graph; a frame of play is not worth a point of its own.
+  if(secs>=30){spoint(Math.max(from,now-secs),G.earned);spoint(now,G.earned+grew);ssave();}
   G.n+=grew;G.earned+=grew;
   return grew;
 }
@@ -1718,17 +1762,36 @@ function manualReset(){
   shopSync();paintGame();
 }
 
-// Every digit, grouped in threes with a thin space. It used to switch to
-// "1.2B" past a million; that was decided when the font was the constraint,
-// and it is the wrong trade for a counter whose whole pleasure is watching
-// it get long. The font steps down instead (see #score.d10 and friends).
+// Three figures and a suffix past a thousand: 1.23M, 45.6B. It was every
+// digit for a while, on the theory that watching the number get long was the
+// pleasure of it; at a few thousand a second the last six digits changed
+// every frame, and a flickering block of large numbers across the middle of
+// the screen is not a pleasure for anybody, and for some people a hazard.
+// Three figures change a few times a second at most. Truncated, never
+// rounded, so a number never shows more than there is, and never goes down.
+const SUFFIX=["","K","M","B","T","Qa","Qi","Sx","Sp","Oc","No","Dc"];
 function num(v){
-  v=Math.floor(v);
-  return String(v).replace(/\B(?=(\d{3})+$)/g,"\u2009");
+  v=Math.floor(Math.max(0,v));
+  if(v<1000)return String(v);
+  let i=0;
+  while(v>=1000&&i<SUFFIX.length-1){v/=1000;i++;}
+  const s=v>=100?String(Math.floor(v)):v>=10?(Math.floor(v*10)/10).toFixed(1)
+                                          :(Math.floor(v*100)/100).toFixed(2);
+  return s+SUFFIX[i];
 }
+// Every digit, for the things that are counted rather than grown.
+function whole(v){return String(Math.floor(v)).replace(/\B(?=(\d{3})+$)/g,"\u2009");}
 function cost(it){return Math.ceil(it.c*Math.pow(it.m||1.15,G.own[it.k]||0));}
-// A rate: one decimal while it is small, every digit once it is not.
+// A rate: one decimal while it is small, three figures once it is not.
 function rate(v){return v<10?v.toFixed(1):num(v);}
+// Clicks a second, over the last two seconds: the half of the rate the
+// garden cannot see. "Per second" used to be the garden's alone, so a
+// minute of furious clicking read as if nothing were happening.
+function clickRate(){
+  const now=performance.now();
+  while(G.taps.length&&now-G.taps[0]>2000)G.taps.shift();
+  return G.taps.length/2;
+}
 function recalc(){
   let ps=0,cl=1;
   for(const it of SHOP){const q=G.own[it.k]||0;if(!q)continue;
@@ -1791,7 +1854,7 @@ function stepParts(dt){
 
 /* ---- the click ------------------------------------------------------------ */
 function gclick(ev){
-  const v=G.click;G.n+=v;G.earned+=v;G.clicks++;
+  const v=G.click;G.n+=v;G.earned+=v;G.clicks++;G.taps.push(performance.now());
   G.sv-=3.4;                                   // kick the squash spring
   const r=$("gtom").getBoundingClientRect();
   const x=ev&&ev.clientX!==undefined?ev.clientX:r.left+r.width/2;
@@ -1908,15 +1971,15 @@ function buy(it){
 
 /* ---- scoreboard ----------------------------------------------------------- */
 function paintGame(){
-  const sc=$("score"),digits=String(Math.floor(G.n)).length;
-  sc.textContent=num(G.n);
-  sc.classList.toggle("d10",digits>=10&&digits<13);
-  sc.classList.toggle("d13",digits>=13&&digits<16);
-  sc.classList.toggle("d16",digits>=16);
-  // Both rates, so a float of "+40" has a "40 per click" to be checked against.
-  $("rate").textContent=rate(G.ps)+" per second  ·  "+rate(G.click)+" per click";
+  const sc=$("score"),t=num(G.n);
+  if(sc.textContent!==t)sc.textContent=t;
+  // Both rates, so a float of "+40" has a "40 per click" to be checked
+  // against; the per-second one counts your clicking as well as the garden.
+  $("rate").textContent=rate(G.ps+clickRate()*G.click)+" per second  ·  "+
+    rate(G.click)+" per click";
   const today=Math.max(HIST[G.day]||0,Math.floor(G.earned));
   $("best").textContent="today "+num(today)+"  ·  best day "+num(Math.max(ALLBEST,today));
+  if(G.graph)paintChart();
   // The corner counts clicks, not tomatoes. It used to show G.earned, which
   // is the same number the line above already gives as "today" — and called
   // it "grown in all", which it never was: rollDay zeroes earned at
@@ -1925,10 +1988,34 @@ function paintGame(){
   // same garden reaches the same total whether it was worked or merely left
   // running, and only this number tells the two apart.
   $("glife").textContent=G.clicks
-    ? num(G.clicks)+(G.clicks===1?" click":" clicks")+" today" : "";
+    ? whole(G.clicks)+(G.clicks===1?" click":" clicks")+" today" : "";
   // No overrun branch: the game closes itself the moment the break is over.
   $("gclock").textContent=st&&st.phase==="BREAK"
     ? mmss(Math.max(0,st.target-Date.now()/1000))+" of break left" : "";
+}
+// The day's line, from its first point to now, from nought to the top. Drawn
+// four times a second at most: it is a graph, not an animation.
+let chartAt=0;
+function paintChart(){
+  const now=performance.now();
+  if(now-chartAt<250)return;
+  chartAt=now;
+  const t1=Date.now()/1000,pts=(SER.day===G.day?SER.pts:[]).concat([[t1,G.earned]]);
+  const t0=pts[0][0],span=Math.max(60,t1-t0),top=Math.max(1,...pts.map(p=>p[1]));
+  const xy=pts.map(p=>[((p[0]-t0)/span*100).toFixed(2),(40-p[1]/top*38).toFixed(2)]);
+  const line="M"+xy.map(p=>p.join(",")).join("L");
+  $("cline").setAttribute("d",line);
+  $("carea").setAttribute("d",line+"L100,40L0,40Z");
+  const d=new Date(t0*1000);
+  $("cfrom").textContent=pts.length>1
+    ? String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0") : "";
+  $("ctop").textContent=num(top);
+}
+function toggleChart(){
+  G.graph=!G.graph;
+  $("chart").hidden=!G.graph;
+  chartAt=0;
+  if(G.graph)paintChart();
 }
 
 /* ---- loop / open / close --------------------------------------------------- */
@@ -1982,6 +2069,7 @@ function loop(ts){
     goldStep(dt,ts);
     if(ts-G.shopAt>120){G.shopAt=ts;shopSync();}
     if(ts-G.saveAt>5000){G.saveAt=ts;gsave();}
+    if(ts-G.pointAt>10000){G.pointAt=ts;spoint(Date.now()/1000,G.earned);ssave();}
   }
   stepParts(dt);
   G.raf=(G.on||G.parts.length)?requestAnimationFrame(loop):0;
@@ -2019,16 +2107,19 @@ function openGame(){
 function closeGame(){
   if(!G.on)return;
   G.on=false;accrue();gsave();   // bank it, and stamp the save with now
+  spoint(Date.now()/1000,G.earned);ssave();
   document.body.classList.remove("playing");
   const g=$("game");g.classList.remove("up");
   if(G.gold){G.gold.el.remove();G.gold=null;}
   // Clear at the end of the fade: invisible, and a reopen inside it wins.
   setTimeout(()=>{if(!G.on){g.classList.remove("on");gclear();}},340);
 }
-gload();recalc();shopBuild();
+gload();sload();recalc();shopBuild();
 $("gtom").addEventListener("click",gclick);
 $("gback").addEventListener("click",closeGame);
 $("greset").addEventListener("click",resetArm);
+$("ggraph").addEventListener("click",toggleChart);
+$("best").addEventListener("click",toggleChart);
 
 ticker=setInterval(paint,250);
 
