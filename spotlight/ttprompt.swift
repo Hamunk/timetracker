@@ -234,6 +234,7 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
                   i >= 0, i < playlists.count,
                   validSpotifyURI(playlists[i].uri) else { return }
             spotifyCommand("uri \(playlists[i].uri)")
+            reclaimKeys()
         } else if body.hasPrefix("note.save.") {
             guard feat.contains("reminders") else { return }
             saveNote(String(body.dropFirst(10)))
@@ -527,9 +528,29 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
         wv.evaluateJavaScript("window.ttSetState(" + json + ")", completionHandler: nil)
     }
 
+    // The keyboard, back to the panel, a few times over the next seconds.
+    // Starting a playlist can launch Spotify, and a launched app takes the
+    // keyboard whether or not it was asked to come forward: the report was a
+    // cursor stuck as a pointing hand and an Esc that did nothing until the
+    // screen was clicked. Asking for activation back no longer works — since
+    // macOS 14 an app may not take it from another — but this panel does not
+    // need activation to be key (see below), so it simply becomes key again.
+    func reclaimKeys() {
+        for t in [0.6, 1.5, 3, 5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard let p = self?.panel, p.isVisible else { return }
+                p.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
     func applicationDidFinishLaunching(_ n: Notification) {
         guard let s = NSScreen.main else { return }
-        panel = P(contentRect: s.frame, styleMask: [.borderless],
+        // Non-activating: the panel can be the key window, and so get Enter,
+        // Esc and every key a panel in the menu needs, without this app being
+        // the active one. Activation was what the tomato used to rely on, and
+        // it is no longer an app's to take back once something else has it.
+        panel = P(contentRect: s.frame, styleMask: [.borderless, .nonactivatingPanel],
                   backing: .buffered, defer: false)
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary,
@@ -557,7 +578,7 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
                 self.panel.orderFrontRegardless()
                 self.beat()
             }
-            if !self.panel.isKeyWindow { self.panel.makeKey() }
+            if !self.panel.isKeyWindow { self.panel.makeKeyAndOrderFront(nil) }
             if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
         }
     }
