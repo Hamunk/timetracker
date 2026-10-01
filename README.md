@@ -3,175 +3,86 @@
 > *Simplicity is prerequisite for reliability.*
 > — Edsger W. Dijkstra, EWD498
 
-## Quickstart
+Track what you work on, and take real breaks. For macOS.
+
+## Install
+
+Open Terminal, paste this line, and press Return:
 
 ```bash
 git clone https://github.com/Hamunk/timetracker.git && cd timetracker && ./spotlight/install.sh
 ```
 
-Needs macOS and the Xcode command line tools (`xcode-select --install`). The
-installer opens a setup page in your browser the first time.
-
-## What it is
-
-A record of when you worked and on what, kept in a tab-separated file, driven
-from the launcher you already use. It depends on nothing that does not ship
-with macOS.
-
-There is no daemon, no database, and no account. Each category is a small
-application bundle, so Spotlight and Alfred can both start it without a
-plugin.
-
-## Install
-
-The pomodoro screen needs the Xcode command line tools. Without them the
-tracker installs and works, and pomodoro mode is not offered.
-
-The first install opens a setup page in your browser: name your first
-categories, choose whether pomodoro mode is on by default, and grant the three
-optional permissions while nothing is waiting on them. Re-run the installer
-whenever you like; it only changes what changed.
-
-`./spotlight/uninstall.sh` removes the program and keeps your log.
-`--purge-data` removes the log too, and says so first.
+If macOS offers to install the command line developer tools, click Install,
+wait for it to finish, and paste the line again. TimeTracker opens by itself
+when it is done and asks what you work on.
 
 ## Use
 
-Open the launcher, type, press Enter.
+Open **TimeTracker** like any other app. Choose a subject to start; press
+Stop when you are done. Starting asks for a plan and stopping asks what you
+got done; both are optional, and Cancel means nothing happened.
+
+Or, faster, from Spotlight (<kbd>⌘</kbd> <kbd>Space</kbd>):
 
 | Type | Does |
 |---|---|
-| `time` | stop the running timer, or start the most recent category |
-| `time <key, name or keyword>` | start that category, or switch to it |
-| `time new` | create a category |
-| `time dashboard` | totals and recent sessions, in your browser |
-| `time settings` | durations, keys, Spotify, Reminders, Messages, calendar, categories |
-| `time guide` | how everything works |
-| `time categories` | edit names and keywords in a text editor |
-| `time data` | open the data folder |
+| `time` | stop, or start the last subject |
+| `time calculus` | start or switch to a subject, by name, code or keyword |
+| `time update` | install the newest version |
 
-Starting asks what you plan to do; stopping asks what you did. Both answers
-are optional and both are stored with the session. There is no pause: a break
-is part of the session.
+With **Pomodoro** ticked, a tomato fills the screen after 25 minutes and
+offers a 5-minute break. The break lasts until you say you are back.
+<kbd>Tab</kbd> on a break opens a menu with Spotify, a note to Reminders,
+and Messages.
 
-## Categories
+**Friends** can see where each other is in the pomodoro and write during
+breaks. Add one by their username; they accept. Off until you turn it on.
 
-| | Example | Role |
-|---|---|---|
-| key | `TDT4100` | the permanent identity; the only thing the log stores |
-| name | `Objektorientert programmering` | what it is called |
-| keywords | `oop`, `java` | what you actually type |
+## Update
 
-Renaming is free and a nickname costs nothing, because the log never stores
-either. In the launcher, any of the three will do:
+`time update` in Spotlight, or Settings → Check for updates. Your data is
+backed up before every update.
 
+## Your data
+
+Everything is in `~/.timetrack`, as text files only you can read:
+`sessions.tsv` is the log, `categories.tsv` your subjects, `settings.tsv`
+what you changed. Every install and update copies them to
+`~/.timetrack/backups` first, and keeps the last ten copies.
+
+Nothing leaves your Mac, except Messages when it is on: encrypted, through a
+public relay. [SECURITY.md](SECURITY.md) has the details.
+
+## Remove
+
+From the folder you installed from:
+
+```bash
+./spotlight/uninstall.sh
 ```
-time oop        ┐
-time TDT4100    ├─  all reach  →  time TDT4100 – Objektorientert programmering
-time objekt     ┘
+
+Your data stays. Add `--purge-data` to remove it too.
+
+## Releasing
+
+A release is a tag. Users only ever get tagged versions:
+
+```bash
+git tag v2.0.0 && git push --tags
 ```
 
-## Pomodoro
-
-> *The competent programmer is fully aware of the strictly limited size of his
-> own skull.*
-> — Edsger W. Dijkstra, EWD340
-
-Twenty-five minutes of work, five of break, a longer break every fourth. When
-a work session ends, a tomato takes the whole screen. Music and video that
-can be reached are paused. The break ends when you say so, and time past the
-scheduled end is logged as overrun on the session.
-
-The break screen has a menu with three tools: a Spotify remote for your break
-playlists, a note box that saves into Apple Reminders, and Messages. None of
-them can start a cycle, end a break, or write to the log.
-
-## Messages
-
-Write to your friends from the break menu, and see where each of them is in
-their pomodoro: *Working · 14 of 25 min*, *On a break · 3 of 5 min*. To add a
-friend, one of you chooses *Make a code* and sends the code to the other
-privately; the other chooses *I have a code* and pastes it. The code is the
-whole friendship. There is no account.
-
-Write whenever you like. A message waits and arrives at your friend's next
-break, as theirs to you arrive at yours; nothing interrupts a work session.
-
-Messages travel through [ntfy.sh](https://ntfy.sh), a public relay, sealed
-before they leave your Mac. The relay cannot read them and forgets them after
-twelve hours, so a message to someone who takes no break in that time is lost.
-It does see your IP address and when you start and end work and breaks, and
-so do your friends. Off by default; with it off, nothing here talks to the
-internet.
-
-## Settings
-
-`time settings`, or `~/.timetrack/settings.tsv`: `key<TAB>value`, one per
-line. A missing file means every default; a value out of range reads as its
-default. The settings page groups them: timer, break screen, Spotify,
-Reminders, Messages, calendar, categories.
-
-The two short durations accept decimals, so a whole cycle can be tried in
-seconds.
-
-## Where things are
-
-> *The art of programming is the art of organizing complexity.*
-> — Edsger W. Dijkstra, EWD249
-
-Everything is in `~/.timetrack/`, readable only by your user, and every file
-is text.
-
-| File | Contents |
-|---|---|
-| `sessions.tsv` | the log: start, end, duration, category, note, plan, recap, pomodoros, overrun |
-| `categories.tsv` | key, name, keywords, last used, hidden |
-| `settings.tsv` | what you changed from the defaults |
-| `state` | the running session, if there is one |
-| `paint-calendar` | the calendar to write sessions to; absent means none |
-| `reminders-list` | the list break notes go to |
-| `spotify-playlists.tsv` | break playlists, and the one kept for work |
-| `friends.tsv` | your friends and their codes; the one secret here |
-| `chat-log.tsv` | what you and your friends have said, the last few hundred lines each |
-| `chat-sync.tsv` | what you have read, and where each friend was when you last heard |
-| `chat-relay` | the relay Messages uses, if not ntfy.sh |
-
-Every write goes through `action.sh`, which takes a lock and validates. The
-dashboard has no other path to the log. The `chat-` files and `friends.tsv`
-are the exception, and have one writer of their own: the chat helper, the
-only program that reads a code.
-
-## Calendar
-
-Name a calendar in settings and each closed session is written to it. Each
-update reconciles the last fourteen days against the log, so corrections
-propagate and an outage costs nothing. Give it an empty calendar of its own:
-it rewrites what it finds there. Until one update has succeeded against the
-calendar you named, it refuses to delete anything it did not create.
+Bump `VERSION` in the same commit; `time update` refuses a tag whose
+`VERSION` says something else.
 
 ## Working on it
 
-`dev.sh` builds a second, fully separate install (its own data, bundles,
-identifiers and launcher word) so the program can be changed while the real
-one is in use. `CLAUDE.md` describes the arrangement. To install against a
-scratch directory by hand, set `TIMETRACK_DIR`, `TIMETRACK_APPS_DIR`,
-`TIMETRACK_BID_PREFIX` and `TIMETRACK_VERB`; the installer bakes all four into
-the bundles it generates.
+`./dev.sh` builds a second, separate install (`devtime`, *TimeTracker
+devtime*) with its own data and identity, so the program can be changed while
+the real one is in use. [CLAUDE.md](CLAUDE.md) describes the arrangement.
 
-## Security
-
-> *Program testing can be used to show the presence of bugs, but never to show
-> their absence!*
-> — Edsger W. Dijkstra, EWD249
-
-`categories.tsv` is data you may edit, and it never runs as code. The
-dashboard listens only on this computer, only while open, with a per-run
-token. Messages, when on, is the one part that talks to the internet: only by
-connecting out, and only in sealed messages — during a break, and for a moment
-at each change of phase to say where you now are.
-`SECURITY.md` has the full review.
-
-The log is a record of your hours. It is kept locally and sent nowhere.
+Tests: `python3 spotlight/migrate.test.py`, `python3 spotlight/chat.test.py`,
+and `python3 .claude/hooks/guard-prod.test.py`.
 
 ## License
 

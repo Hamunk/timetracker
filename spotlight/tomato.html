@@ -754,15 +754,12 @@ function explode(){
 
 /* ---- views ---------------------------------------------------------------- */
 const TIPS={
-  tomato:'<kbd>&crarr;</kbd>take the break<br><kbd>esc</kbd>snooze it'+
-    '<span class="note">No answer takes the break after {S}s. Skipping counts '+
-    'the pomodoro and starts the next one.</span>',
+  tomato:'<kbd>&crarr;</kbd>take the break<br><kbd>esc</kbd>snooze'+
+    '<span class="note">The break starts by itself after {S}s.</span>',
   break:'<kbd>&crarr;</kbd>back to work<br><kbd>{K}</kbd>menu'+
-    '<span class="note">The break ends when you end it. Time past the '+
-    'scheduled end is logged as overrun.</span>',
+    '<span class="note">Lasts until you are back.</span>',
   breakover:'<kbd>&crarr;</kbd>back to work<br><kbd>{K}</kbd>menu'+
-    '<span class="note">Time past the scheduled end is logged as overrun '+
-    'on this session.</span>'
+    '<span class="note">Time over is noted on the session.</span>'
 };
 
 function build(v){
@@ -778,7 +775,10 @@ function build(v){
     .replace("{K}",keyLabel(keyset().menu));
   if(v==="tomato"){
     $("big").textContent="";
-    btn("Skip","ghost",explode);
+    // "Skip" was the word here, and on the stop dialog it once meant the
+    // opposite of carrying on. This one counts the pomodoro and starts the
+    // next, which is what keeping working is, so that is what it says.
+    btn("Keep working","ghost",explode);
     btn("Snooze",null,()=>post("snooze"));
     btn("Take break","primary",()=>post("accept"));
     // Walked away mid-pomodoro: take the break rather than sitting here
@@ -1408,8 +1408,7 @@ function drawConv(){
   box.textContent="";
   if(!log.length&&!mine.length){
     const e=document.createElement("div");e.className="chnone";
-    e.textContent="Nothing yet. Whatever you write reaches "+f.n+
-      " on the next break, or now, if this is one.";
+    e.textContent="Nothing yet.";
     box.appendChild(e);
   }
   let top=0;
@@ -1428,8 +1427,8 @@ function drawConv(){
   t.placeholder="Message "+f.n;
   $("chsend").disabled=!t.value.trim();
   $("chhint").textContent=w.c==="on"?"":w.c==="work"
-    ? f.n+" is working. This will be waiting at the next break."
-    : "Messages wait on the relay for up to twelve hours.";
+    ? f.n+" is working, and will see it on the next break."
+    : "Arrives at "+f.n+"'s next break, within twelve hours.";
   if(atEnd||CH.stick){box.scrollTop=box.scrollHeight;CH.stick=false;}
 }
 function chatSend(){

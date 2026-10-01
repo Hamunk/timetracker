@@ -139,10 +139,12 @@ cat_name() {
         NR>1 && $1==k {print $2; exit}' "$CAT_FILE"
 }
 
-# What the user sees in notifications: "BØK2100 (Bærekraftig økonomistyring 2)"
+# What the user sees in notifications: the name, or the key when there is
+# none — the same title the app shows. It was "BØK2100 (Bærekraftig
+# økonomistyring 2)", which reads as an error message in a notification.
 label() {
     local n; n=$(cat_name "$1")
-    if [[ -n "$n" ]]; then printf '%s (%s)' "$1" "$n"; else printf '%s' "$1"; fi
+    if [[ -n "$n" ]]; then printf '%s' "$n"; else printf '%s' "$1"; fi
 }
 
 LAST_DUR=0
@@ -456,14 +458,14 @@ cur_plan="${cur_plan:-}"
 recovered_msg=""
 if [[ "$status" == "RUNNING" ]]; then
     if [[ -z "$cur_key" ]] || ! is_valid_epoch "$seg_start"; then
-        recovered_msg="Discarded corrupt timer state"
+        recovered_msg="The running timer could not be read, and was reset"
         status="" ; cur_key="" ; seg_start=0
         clear_state
     fi
 elif [[ -n "$status" ]]; then
     # RUNNING is the only live status. Anything else — including a PAUSED
     # line from before that state was removed — is corrupt, not a timer.
-    recovered_msg="Discarded corrupt timer state"
+    recovered_msg="The running timer could not be read, and was reset"
     status="" ; cur_key="" ; seg_start=0
     clear_state
 else
@@ -476,7 +478,7 @@ autoclose_msg=""
 if [[ "$status" == "RUNNING" ]] && (( now - seg_start > GUARD_SECS )); then
     close_segment "$cur_key" "$seg_start" "$(( seg_start + GUARD_SECS ))" "AUTOCLOSED" \
         "$cur_plan" ""
-    autoclose_msg="Auto-stopped $(label "$cur_key") after 8h (AUTOCLOSED)"
+    autoclose_msg="$(label "$cur_key") was stopped after 8 hours. Check its end in History"
     clear_state
     status="" ; cur_key="" ; seg_start=0
 fi
@@ -493,12 +495,12 @@ start_key() {
     if [[ "$status" == "RUNNING" ]]; then
         close_segment "$cur_key" "$seg_start" "$close_at" "" "$cur_plan" "$recap"
         [[ "$cur_key" != "$key" ]] && \
-            closed_msg="stopped $(label "$cur_key") $(fmtdur "$LAST_DUR")"
+            closed_msg="$(label "$cur_key"): $(fmtdur "$LAST_DUR")"
     fi
     write_state "RUNNING" "$key" "$at" "$plan"
     bump_category "$key" "$now"
     action_msg="Started $(label "$key")"
-    [[ -n "$closed_msg" ]] && action_msg="$action_msg; $closed_msg"
+    [[ -n "$closed_msg" ]] && action_msg="$action_msg. $closed_msg"
     # Explicit: without this the function inherits the exit status of the test
     # above, which is 1 when nothing was closed — and under `set -e` that kills
     # the script before it ever prints the notification.
@@ -511,7 +513,7 @@ case "$query" in
         name=$(sanitize_field "${3:-}")
         keywords=$(sanitize_field "${4:-}")
         if [[ -z "$key" ]]; then
-            action_msg="Key cannot be empty"
+            action_msg="A subject needs a name"
         else
             add_category "$key" "$name" "$keywords" "$now"
             action_msg="Added $(label "$key")"
@@ -535,16 +537,16 @@ case "$query" in
         key=$(sanitize_field "${2:-}")
         want=$(sanitize_field "${3:-}")
         if [[ -z "$key" ]]; then
-            action_msg="Key cannot be empty" ; action_rc=1
+            action_msg="A subject needs a name" ; action_rc=1
         elif [[ "$want" != "on" && "$want" != "off" ]]; then
             action_msg="Hidden must be on or off" ; action_rc=1
         elif ! cat_exists "$key"; then
-            action_msg="Unknown category $key" ; action_rc=1
+            action_msg="No subject called $key" ; action_rc=1
         elif [[ "$want" == "on" && "$status" == "RUNNING" && "$cur_key" == "$key" ]]; then
             action_msg="$(label "$key") is running. Stop it first" ; action_rc=1
         elif [[ "$want" == "on" ]]; then
             set_cat_hidden "$key" 1
-            action_msg="Hid $(label "$key"). History kept"
+            action_msg="Archived $(label "$key")"
         else
             set_cat_hidden "$key" ""
             action_msg="Restored $(label "$key")"
@@ -553,9 +555,9 @@ case "$query" in
     delcat)
         key=$(sanitize_field "${2:-}")
         if [[ -z "$key" ]]; then
-            action_msg="Key cannot be empty" ; action_rc=1
+            action_msg="A subject needs a name" ; action_rc=1
         elif ! cat_exists "$key"; then
-            action_msg="Unknown category $key" ; action_rc=1
+            action_msg="No subject called $key" ; action_rc=1
         elif [[ "$status" == "RUNNING" && "$cur_key" == "$key" ]]; then
             action_msg="$(label "$key") is running. Stop it first" ; action_rc=1
         else
@@ -567,7 +569,7 @@ case "$query" in
             delete_category "$key"
             action_msg="Deleted $gone"
             if (( orphans > 0 )); then
-                action_msg="$action_msg. $orphans logged session(s) now show as $key"
+                action_msg="$action_msg. Its hours are kept, under $key"
             fi
         fi
         ;;
@@ -582,9 +584,9 @@ case "$query" in
         if [[ "$status" == "RUNNING" ]] && (( at < seg_start )); then at="$now"; fi
 
         if [[ -z "$key" ]]; then
-            action_msg="Key cannot be empty"
+            action_msg="A subject needs a name"
         elif ! cat_exists "$key"; then
-            action_msg="Unknown category $key. Add it with \"${TIMETRACK_VERB:-time} new\""
+            action_msg="No subject called $key. Add it in TimeTracker"
         else
             start_key "$key" "$at" "$in_plan" "$in_recap" "$at"
         fi
@@ -594,10 +596,10 @@ case "$query" in
         # so the timer begins immediately and the prompt can take its time.
         in_plan=$(sanitize_field "${2:-}")
         if [[ "$status" != "RUNNING" ]]; then
-            action_msg="Nothing running to annotate"
+            action_msg="Nothing is running"
         else
             write_state "RUNNING" "$cur_key" "$seg_start" "$in_plan"
-            action_msg="Noted"
+            action_msg="Plan saved"
         fi
         ;;
     stop)
@@ -607,9 +609,9 @@ case "$query" in
         if [[ "$status" == "RUNNING" ]] && (( at < seg_start )); then at="$now"; fi
         if [[ "$status" == "RUNNING" ]]; then
             close_segment "$cur_key" "$seg_start" "$at" "" "$cur_plan" "$in_recap"
-            action_msg="Stopped $(label "$cur_key"), $(fmtdur "$LAST_DUR")"
+            action_msg="Stopped $(label "$cur_key"): $(fmtdur "$LAST_DUR")"
         else
-            action_msg="Nothing running"
+            action_msg="Nothing is running"
         fi
         clear_state
         ;;
@@ -623,24 +625,24 @@ case "$query" in
         if [[ ! "$sel_dur" =~ ^[0-9]+$ ]] || [[ -z "$sel_start" || -z "$sel_key" ]]; then
             action_msg="Bad session selector" ; action_rc=1
         elif ! is_valid_epoch "$new_start" || ! is_valid_epoch "$new_end"; then
-            action_msg="Invalid start or end time" ; action_rc=1
+            action_msg="Enter a start and an end" ; action_rc=1
         elif (( new_end < new_start )); then
-            action_msg="End is before start" ; action_rc=1
+            action_msg="It ends before it starts" ; action_rc=1
         elif (( new_end > now )); then
-            action_msg="End is in the future" ; action_rc=1
+            action_msg="It ends in the future" ; action_rc=1
         elif (( new_end - new_start > MAX_EDIT_SECS )); then
-            action_msg="Longer than 24h. Split it instead" ; action_rc=1
+            action_msg="A session can be 24 hours at most" ; action_rc=1
         elif [[ -z "$new_key" ]] || ! cat_exists "$new_key"; then
-            action_msg="Unknown category ${new_key:-(empty)}" ; action_rc=1
+            action_msg="No subject called ${new_key:-(empty)}" ; action_rc=1
         elif [[ "$status" == "RUNNING" ]] && (( new_end > seg_start )); then
             # Overlapping the live segment would count the overlap twice.
-            action_msg="Overlaps the running timer. Stop it first" ; action_rc=1
+            action_msg="It overlaps the session that is running" ; action_rc=1
         elif [[ "$(count_sessions "$sel_start" "$sel_dur" "$sel_key")" != "1" ]]; then
-            action_msg="Session not found or changed. Reload" ; action_rc=1
+            action_msg="That session has changed. Try again" ; action_rc=1
         else
             edit_session "$sel_start" "$sel_dur" "$sel_key" \
                 "$new_start" "$new_end" "$new_key" "$new_plan" "$new_recap"
-            action_msg="Updated $(label "$new_key"), $(fmtdur $(( new_end - new_start )))"
+            action_msg="Saved"
         fi
         ;;
     delsession)
@@ -648,10 +650,10 @@ case "$query" in
         if [[ ! "$sel_dur" =~ ^[0-9]+$ ]] || [[ -z "$sel_start" || -z "$sel_key" ]]; then
             action_msg="Bad session selector" ; action_rc=1
         elif [[ "$(count_sessions "$sel_start" "$sel_dur" "$sel_key")" != "1" ]]; then
-            action_msg="Session not found or changed. Reload" ; action_rc=1
+            action_msg="That session has changed. Try again" ; action_rc=1
         else
             delete_session "$sel_start" "$sel_dur" "$sel_key"
-            action_msg="Deleted $(label "$sel_key"), $(fmtdur "$sel_dur")"
+            action_msg="Session deleted"
         fi
         ;;
     setconf)
@@ -677,7 +679,7 @@ case "$query" in
                 action_rc=1
             else
                 write_setting "$key" "$value"
-                action_msg="Set $key = $value"
+                action_msg="Saved"
             fi
         fi
         ;;
@@ -694,9 +696,9 @@ case "$query" in
         elif [[ -z "$pl_name" ]]; then
             action_msg="Give the playlist a name" ; action_rc=1
         elif playlist_exists "$pl_uri"; then
-            action_msg="That playlist is already in the list" ; action_rc=1
+            action_msg="That playlist is already there" ; action_rc=1
         elif (( $(count_playlists) >= MAX_PLAYLISTS )); then
-            action_msg="Playlist list is full ($MAX_PLAYLISTS)" ; action_rc=1
+            action_msg="That is $MAX_PLAYLISTS playlists, the most there is room for" ; action_rc=1
         else
             add_playlist "$pl_uri" "$pl_name"
             action_msg="Added $pl_name"
@@ -707,24 +709,24 @@ case "$query" in
         if ! pl_uri=$(normalize_spotify_uri "$pl_raw"); then
             action_msg="Not a Spotify link" ; action_rc=1
         elif ! playlist_exists "$pl_uri"; then
-            action_msg="Playlist not in the list. Reload" ; action_rc=1
+            action_msg="That playlist is gone" ; action_rc=1
         else
             delete_playlist "$pl_uri"
-            action_msg="Removed from the break menu"
+            action_msg="Removed"
         fi
         ;;
     workplaylist)
         pl_raw=$(sanitize_field "${2:-}")
         if [[ "$pl_raw" == "-" ]]; then
             set_work_playlist "-"
-            action_msg="No work playlist. Break music is paused when you are back"
+            action_msg="No work playlist"
         elif ! pl_uri=$(normalize_spotify_uri "$pl_raw"); then
             action_msg="Not a Spotify link" ; action_rc=1
         elif ! playlist_exists "$pl_uri"; then
-            action_msg="Playlist not in the list. Reload" ; action_rc=1
+            action_msg="That playlist is gone" ; action_rc=1
         else
             set_work_playlist "$pl_uri"
-            action_msg="Work playlist set"
+            action_msg="Work playlist saved"
         fi
         ;;
     setremlist)
@@ -746,7 +748,7 @@ case "$query" in
             tmp="$(mktemp "$DATA_DIR/.remlist.XXXXXX")"
             printf '%s\n' "$rl_name" > "$tmp"
             mv -f "$tmp" "$REMLIST_FILE"
-            action_msg="Break notes go to “${rl_name}”"
+            action_msg="Notes go to ${rl_name}"
         fi
         ;;
     setpaintcal)
@@ -757,7 +759,7 @@ case "$query" in
         pc_name=$(sanitize_field "${2:-}")
         if [[ "$pc_name" == "-" || -z "$pc_name" ]]; then
             rm -f "$PAINTCAL_FILE"
-            action_msg="No calendar chosen. Nothing is written"
+            action_msg="No calendar"
         elif (( ${#pc_name} > 200 )); then
             action_msg="Calendar name is too long" ; action_rc=1
         else
@@ -767,7 +769,7 @@ case "$query" in
             # Not deferred to the next session close: choosing a calendar is
             # exactly the moment you want to see whether it worked.
             LOG_CHANGED=1
-            action_msg="Painting onto “${pc_name}”"
+            action_msg="Copying sessions to ${pc_name}"
         fi
         ;;
     setupdone)
