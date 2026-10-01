@@ -1,11 +1,26 @@
-// TimeTracker prompt & pomodoro overlay. One app, two modes:
+// TimeTracker prompts & pomodoro overlay. One app, two jobs:
 //
-//   ttprompt prompt <question> <subtitle> <answer_path> [ticked]
-//       Start prompt: question, subtitle, text field, and a real "Pomodoro
-//       mode" checkbox, ticked to start iff [ticked] is "1" (the caller reads
-//       the pomodoro_default setting). Skip / Save; Enter = Save, Esc = Skip,
-//       120s timeout = Skip. Always exits, and always writes the answer file:
-//       "POMODORO<TAB><text>" or "<TAB><text>" (empty on skip).
+//   ttprompt start  <answer_path> <title> <subtitle> <ticked>
+//   ttprompt stop   <answer_path> <title> <subtitle>
+//   ttprompt switch <answer_path> <title> <subtitle> <from> <ticked>
+//       The dialogs in front of a start, a stop, and a switch from <from> to
+//       another category. Each says what will happen on its default button —
+//       Start, Stop, Switch — and has a way out that means nothing happened:
+//       Cancel, or for a stop, Keep working. Enter is the default button and
+//       Esc the way out. Two minutes without an answer is the default button:
+//       you asked for the start or the stop, and a dialog left on screen must
+//       not quietly undo that. Always exits, and always writes one line to
+//       the answer file:
+//           START<TAB><pomodoro 0|1><TAB><plan>
+//           STOP<TAB><recap>
+//           SWITCH<TAB><pomodoro 0|1><TAB><recap><TAB><plan>
+//           CANCEL
+//
+//       These replaced a single "prompt" with Skip and Save, where Skip was
+//       read three ways: as "no note", as "don't start", and — by someone
+//       wrapping up a session — as "I'm not done yet, let me carry on". It
+//       meant the first, and the timer had already started or stopped
+//       before the question was even on screen.
 //
 //   ttprompt overlay <choice_path> <long_break_every> [auto_accept_seconds]
 //                     [easter_egg] [menu_features] [keys]
@@ -541,67 +556,130 @@ func oneLine(_ s: String) -> String {
         .trimmingCharacters(in: .whitespaces)
 }
 
+// The start, stop and switch dialogs. One window built from the same parts in
+// three arrangements, so the three read as one thing: a title saying what is
+// about to happen, the category's name under it, one optional line for each
+// session involved, and two buttons, the right-hand one doing what the title
+// says.
 final class Pr: NSObject, NSApplicationDelegate {
-    let q: String; let sub: String; let path: String; let ticked: Bool
-    var win: NSWindow!; var field: NSTextField!; var box: NSButton!
+    let kind: String; let title: String; let sub: String; let from: String
+    let path: String; let ticked: Bool
+    var win: NSWindow!; var recap: NSTextField?; var plan: NSTextField?
+    var box: NSButton?
     var done = false
-    init(q: String, sub: String, path: String, ticked: Bool) {
-        self.q = q; self.sub = sub; self.path = path; self.ticked = ticked
+    init(kind: String, title: String, sub: String, from: String, path: String, ticked: Bool) {
+        self.kind = kind; self.title = title; self.sub = sub; self.from = from
+        self.path = path; self.ticked = ticked
+    }
+    func field(_ placeholder: String) -> NSTextField {
+        let f = NSTextField(string: "")
+        f.font = .systemFont(ofSize: 13)
+        f.placeholderString = placeholder
+        f.lineBreakMode = .byTruncatingTail
+        f.cell?.isScrollable = true
+        return f
     }
     func applicationDidFinishLaunching(_ n: Notification) {
-        let w: CGFloat = 460
-        let ql = NSTextField(wrappingLabelWithString: q)
-        ql.font = .boldSystemFont(ofSize: 14)
-        let sl = NSTextField(wrappingLabelWithString: sub)
-        sl.font = .systemFont(ofSize: 12)
-        sl.textColor = .secondaryLabelColor
-        let f = NSTextField(string: ""); f.font = .systemFont(ofSize: 13); field = f
-        box = NSButton(checkboxWithTitle: "Pomodoro mode", target: nil, action: nil)
-        box.state = ticked ? .on : .off
-        let skip = NSButton(title: "Skip", target: self, action: #selector(skipNow))
-        skip.keyEquivalent = "\u{1b}"
-        let save = NSButton(title: "Save", target: self, action: #selector(saveNow))
-        save.keyEquivalent = "\r"
-        let sp = NSView(); sp.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let row = NSStackView(views: [sp, skip, save]); row.orientation = .horizontal
-        let stack = NSStackView(views: sub.isEmpty ? [ql, f, box, row] : [ql, sl, f, box, row])
+        let w: CGFloat = 400
+        var views: [NSView] = []
+        let tl = NSTextField(wrappingLabelWithString: title)
+        tl.font = .systemFont(ofSize: 15, weight: .semibold)
+        views.append(tl)
+        if !sub.isEmpty {
+            let sl = NSTextField(wrappingLabelWithString: sub)
+            sl.font = .systemFont(ofSize: 12)
+            sl.textColor = .secondaryLabelColor
+            views.append(sl)
+        }
+        switch kind {
+        case "stop":
+            recap = field("What did you get done?")
+            views.append(recap!)
+        case "switch":
+            recap = field("Done on \(from)")
+            plan = field("Plan")
+            views += [recap!, plan!]
+        default:
+            plan = field("Plan")
+            views.append(plan!)
+        }
+        if kind != "stop" {
+            let b = NSButton(checkboxWithTitle: "Pomodoro", target: nil, action: nil)
+            b.state = ticked ? .on : .off
+            box = b
+            views.append(b)
+        }
+        let (outLabel, goLabel) = kind == "stop" ? ("Keep working", "Stop")
+                                : kind == "switch" ? ("Cancel", "Switch") : ("Cancel", "Start")
+        let out = NSButton(title: outLabel, target: self, action: #selector(cancelNow))
+        out.keyEquivalent = "\u{1b}"
+        let go = NSButton(title: goLabel, target: self, action: #selector(goNow))
+        go.keyEquivalent = "\r"
+        let gap = NSView(); gap.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: [gap, out, go]); row.orientation = .horizontal
+        views.append(row)
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
-        for v: NSView in [ql, sl, f, row] {
+        stack.setCustomSpacing(4, after: tl)
+        stack.setCustomSpacing(16, after: views[views.count - 2])
+        stack.edgeInsets = NSEdgeInsets(top: 22, left: 22, bottom: 18, right: 22)
+        for v in views where !(v is NSButton) {
             v.translatesAutoresizingMaskIntoConstraints = false
-            v.widthAnchor.constraint(equalToConstant: w - 40).isActive = true
+            v.widthAnchor.constraint(equalToConstant: w - 44).isActive = true
         }
         win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: w, height: 10),
-                       styleMask: [.titled], backing: .buffered, defer: false)
-        win.title = "TimeTracker"
+                       styleMask: [.titled, .fullSizeContentView], backing: .buffered,
+                       defer: false)
+        win.titlebarAppearsTransparent = true
+        win.titleVisibility = .hidden
+        win.isMovableByWindowBackground = true
         win.contentView = stack
         win.setContentSize(stack.fittingSize)
+        // TTPROMPT_SNAPSHOT=<file.png> draws the dialog into a picture and
+        // leaves without showing it or answering: for looking at a layout
+        // change without a dialog appearing in front of somebody at work.
+        if let shot = ProcessInfo.processInfo.environment["TTPROMPT_SNAPSHOT"],
+           let frame = stack.superview {
+            frame.layoutSubtreeIfNeeded()
+            if let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) {
+                frame.cacheDisplay(in: frame.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: shot))
+            }
+            exit(0)
+        }
         win.center(); win.level = .floating
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        win.makeFirstResponder(f)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in self?.skipNow() }
+        win.makeFirstResponder(recap ?? plan)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in self?.goNow() }
     }
     func finish(_ line: String) {
         if done { return }
         done = true
-        writeResult(line, to: path)
+        writeResult(line + "\n", to: path)
         NSApp.terminate(nil)
     }
-    @objc func skipNow() { finish("\t") }
-    @objc func saveNow() {
-        finish("\(box.state == .on ? "POMODORO" : "")\t\(oneLine(field.stringValue))")
+    @objc func cancelNow() { finish("CANCEL") }
+    @objc func goNow() {
+        let p = box?.state == .on ? "1" : "0"
+        let r = oneLine(recap?.stringValue ?? ""), t = oneLine(plan?.stringValue ?? "")
+        switch kind {
+        case "stop":   finish("STOP\t\(r)")
+        case "switch": finish("SWITCH\t\(p)\t\(r)\t\(t)")
+        default:       finish("START\t\(p)\t\(t)")
+        }
     }
 }
 
 let mode = a.count > 1 ? a[1] : ""
 var del: NSApplicationDelegate?
-if mode == "prompt" {
-    let q = a.count > 2 ? a[2] : "What are you planning to work on?"
-    let sub = a.count > 3 ? a[3] : ""
-    del = Pr(q: q, sub: sub,
-             path: resultPath(a.count > 4 ? a[4] : nil, expected: ".prompt-answer"),
-             ticked: a.count > 5 && a[5] == "1")
+if ["start", "stop", "switch"].contains(mode) {
+    func arg(_ i: Int) -> String { return a.count > i ? a[i] : "" }
+    del = Pr(kind: mode, title: arg(3), sub: arg(4),
+             from: mode == "switch" ? arg(5) : "",
+             path: resultPath(a.count > 2 ? a[2] : nil, expected: ".prompt-answer"),
+             ticked: (mode == "switch" ? arg(6) : arg(5)) == "1")
 } else {
     del = D(dir: dir, cyc: cyc, secs: secs, egg: egg, feat: feat, keys: keys)
 }

@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# Prompted start/switch — what a category app runs.
+# Start a category, or switch to it.
 #
-#   start.sh <key>
+#   start.sh <key>                         what a category app runs: asks first
+#   start.sh <key> --answer <pomodoro 0|1> <plan> [<recap>]
+#                                          what the app runs: it has asked already
 #
 # Ordering is deliberate:
 #   1. stamp the moment the key was pressed, before any dialog
-#   2. if a timer is running, ask what that session ended up being
-#   3. start (closing the old segment at the stamped moment)
-#   4. notify, so there's feedback before the second dialog
-#   5. ask what this session is for — and whether to run it in pomodoro mode
-#      (the box starts ticked iff the pomodoro_default setting says so)
-#   6. attach the plan; arm the pomodoro watcher if the box was ticked
+#   2. ask — Start, or Switch if another category is running — in one dialog
+#      whose Cancel means nothing happens at all
+#   3. start, closing the running segment (if any) at the stamped moment
+#   4. arm the pomodoro watcher if the box was ticked
 #
-# The timer therefore starts at step 3 regardless of how long the prompts take,
-# and the intent lands a few seconds later. Both answers are voluntary; an
-# empty answer is stored as empty and nothing is blocked. The pomodoro work
-# session is measured from the timer's start (pressed_at), not from when the
-# prompt is answered.
+# The stamp is what lets the question come first. It used to come second: the
+# timer started, a notification said so, and then a dialog asked for a plan —
+# so its Skip could only mean "no plan", and there was no way to say "I didn't
+# mean to start". Now nothing is written until the dialog is answered, and the
+# segment still begins when the key was pressed, however long the answer took.
+# The pomodoro's first work block is measured from there too.
 
 set -uo pipefail
 
@@ -29,9 +30,7 @@ esac
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 STATE_FILE="$DATA_DIR/state"
 POMO_FILE="$DATA_DIR/pomodoro"
-ANSWER_FILE="$DATA_DIR/.prompt-answer"
-APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
-PROMPT_APP="$APPS_DIR/TimeTracker Prompt.app"
+CAT_FILE="$DATA_DIR/categories.tsv"
 
 # Only for the checkbox's starting position — see below.
 . "$BIN_DIR/settings.sh"
@@ -45,69 +44,50 @@ status=""; cur_key=""; seg_start=""; cur_plan=""
 if [[ -f "$STATE_FILE" ]]; then
     IFS=$'\t' read -r status cur_key seg_start cur_plan < "$STATE_FILE" 2>/dev/null || true
 fi
+switching=0
+[[ "${status:-}" == "RUNNING" && -n "${cur_key:-}" && "$cur_key" != "$key" ]] && switching=1
 
-recap=""
-if [[ "${status:-}" == "RUNNING" && -n "${cur_key:-}" && "$cur_key" != "$key" ]]; then
-    sub=""
-    [[ -n "${cur_plan:-}" ]] && sub="You planned: $cur_plan"
-    recap=$("$BIN_DIR/prompt.sh" "Wrapping up $cur_key. What did you work on?" "$sub")
-fi
+name=$(TT_K="$key" awk -F'\t' 'BEGIN { k=ENVIRON["TT_K"] }
+    NR>1 && $1==k { print $2; exit }' "$CAT_FILE" 2>/dev/null)
 
-msg=$("$BIN_DIR/action.sh" "start:$key" "" "$recap" "$pressed_at")
-"$BIN_DIR/notify.sh" "$msg"
-
-# --- plan prompt, with the pomodoro checkbox ---------------------------------
-# The Swift helper shows a real checkbox and writes its answer to a file
-# ("POMODORO<TAB><text>" or "<TAB><text>") because stdout of an open'ed app
-# isn't capturable. Skip/Esc/timeout write an empty answer with the flag off.
-#
-# Without the helper there is no checkbox and no pomodoro: the plan prompt
-# still appears as plain text (its answer carries no tab, which the parser
-# below reads as "no flag"), and the cycle is simply not offered. There used
-# to be a three-button dialog standing in for the checkbox, but a tomato
-# needs the overlay the same helper provides — offering the tick without it
-# only promised a cycle that would cancel itself seconds later.
-#
-# pomodoro_default only decides where the checkbox starts. Skipping the
-# prompt still means no cycle, whatever the setting says: an unanswered
-# dialog is not consent, and the timer itself is unaffected either way.
-
-ticked=0
-[[ "$(tt_setting pomodoro_default)" == "on" ]] && ticked=1
-
-flagged=""
-if [[ -x "$PROMPT_APP/Contents/MacOS/ttprompt" ]]; then
-    rm -f "$ANSWER_FILE"
-    /usr/bin/open -W "$PROMPT_APP" --args prompt \
-        "What are you planning to work on?" "$key (optional)" "$ANSWER_FILE" \
-        "$ticked" 2>/dev/null || true
-    if [[ -f "$ANSWER_FILE" ]]; then
-        IFS= read -r flagged < "$ANSWER_FILE" || true
-        rm -f "$ANSWER_FILE"
-    fi
+pomodoro=0; plan=""; recap=""
+if [[ "${2:-}" == "--answer" ]]; then
+    [[ "${3:-}" == "1" ]] && pomodoro=1
+    plan="${4:-}"
+    recap="${5:-}"
 else
-    flagged=$("$BIN_DIR/prompt.sh" \
-        "What are you planning to work on?" "$key (optional)")
+    # pomodoro_default only decides where the checkbox starts. The box is
+    # always there, and nothing arms a cycle except a ticked box on a dialog
+    # somebody answered.
+    ticked=0
+    [[ "$(tt_setting pomodoro_default)" == "on" ]] && ticked=1
+    sub="$name"
+    if (( switching )); then
+        [[ -n "${cur_plan:-}" ]] && sub="${sub:+$sub · }Planned for $cur_key: $cur_plan"
+        answer=$("$BIN_DIR/prompt.sh" switch "Switch to $key" "$sub" "$cur_key" "$ticked")
+    else
+        answer=$("$BIN_DIR/prompt.sh" start "Start $key" "$sub" "$ticked")
+    fi
+    # Split on US, not on the tab: tab is IFS whitespace, and read collapses
+    # a run of it, so an empty recap would hand the plan to the recap.
+    IFS=$'\037' read -r verb f1 f2 f3 <<< "${answer//$'\t'/$'\037'}"
+    case "${verb:-}" in
+        START)  pomodoro="${f1:-0}"; plan="${f2:-}" ;;
+        SWITCH) pomodoro="${f1:-0}"; recap="${f2:-}"; plan="${f3:-}" ;;
+        *)      exit 0 ;;
+    esac
 fi
 
-pomodoro=0
-plan="$flagged"
-if [[ "$flagged" == POMODORO$'\t'* ]]; then
-    pomodoro=1
-    plan="${flagged#POMODORO$'\t'}"
-elif [[ "$flagged" == $'\t'* ]]; then
-    plan="${flagged#$'\t'}"
-fi
-
-[[ -n "$plan" ]] && "$BIN_DIR/action.sh" plan "$plan" >/dev/null 2>&1
+msg=$("$BIN_DIR/action.sh" "start:$key" "$plan" "$recap" "$pressed_at")
+[[ "${2:-}" == "--answer" ]] || "$BIN_DIR/notify.sh" "$msg"
 
 # --- arm the pomodoro cycle --------------------------------------------------
 # The watcher owns the cycle from here. It writes the pomodoro file itself
 # (with its own pid), so all this does is retire any previous watcher and
-# hand over the segment identity. Only armed if the timer we started is
-# still the one running — a stop or switch during the prompt wins.
+# hand over the segment identity. Only armed if the timer just started is
+# the one running: a stop or a switch in the meantime wins.
 
-if (( pomodoro )); then
+if [[ "$pomodoro" == "1" ]]; then
     st=""; k2=""; seg2=""
     IFS=$'\t' read -r st k2 seg2 _ < "$STATE_FILE" 2>/dev/null || true
     if [[ "${st:-}" == "RUNNING" && "${k2:-}" == "$key" && "${seg2:-}" =~ ^[0-9]+$ ]]; then
