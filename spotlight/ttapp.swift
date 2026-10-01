@@ -128,6 +128,30 @@ func installedVersion() -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+// The title bar, given back. The page runs under a transparent title bar so
+// the window is one surface, and a web view takes every click it is under —
+// so the top of the window looked like a title bar and could not be dragged.
+// This strip lies over the top of the page, where the page puts nothing to
+// click, and hands a drag to the window and a double-click to whatever the
+// system's title-bar setting says. The close, minimise and zoom buttons sit
+// above it and are untouched.
+final class DragStrip: NSView {
+    weak var under: NSView?
+    override var mouseDownCanMoveWindow: Bool { true }
+    // A scroll that starts over the strip still scrolls the page below it.
+    override func scrollWheel(with e: NSEvent) { under?.scrollWheel(with: e) }
+    override func mouseDown(with e: NSEvent) {
+        guard let w = window else { return }
+        if e.clickCount == 2 {
+            let act = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+            if act == "Minimize" { w.performMiniaturize(nil) }
+            else if act != "None" { w.performZoom(nil) }
+            return
+        }
+        w.performDrag(with: e)
+    }
+}
+
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
     var win: NSWindow!
     var web: WKWebView!
@@ -157,7 +181,18 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         win.backgroundColor = NSColor(name: nil) { a in
             a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? rgb(22, 22, 21) : rgb(246, 245, 242)
         }
-        win.contentView = web
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 880, height: 640))
+        web.frame = root.bounds
+        web.autoresizingMask = [.width, .height]
+        root.addSubview(web)
+        // As tall as a title bar, across the whole width. The page keeps
+        // its first 40 points clear for this and the window's buttons.
+        let strip = DragStrip(frame: NSRect(x: 0, y: root.bounds.height - 30,
+                                            width: root.bounds.width, height: 30))
+        strip.autoresizingMask = [.width, .minYMargin]
+        strip.under = web
+        root.addSubview(strip)
+        win.contentView = root
         win.center()
         win.setFrameAutosaveName("main")
         win.makeKeyAndOrderFront(nil)
