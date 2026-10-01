@@ -34,7 +34,21 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 # is still one of ours, and it has to go: it is not regenerated, nothing
 # updates it, and it would sit in the launcher for ever as a second copy of a
 # course that already has one.
-BID_PREFIX="${TIMETRACK_BID_PREFIX:-com.timetracker}"
+#
+# Every bundle carries it in its run script (make_app, below), so anything a
+# bundle starts that comes back here — the dashboard adding a category, "time
+# new" — rebuilds under the same identity. It used to carry only the folder,
+# the data and the verb, and a category added from a scratch install's
+# dashboard rebuilt every scratch bundle under the real install's identifiers.
+# Unset all the same, the toggle's identity is the next best answer, and the
+# default only the last.
+BID_PREFIX="${TIMETRACK_BID_PREFIX:-}"
+if [[ -z "$BID_PREFIX" ]]; then
+    BID_PREFIX=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+        "$APPS_DIR/${TIMETRACK_VERB:-time}.app/Contents/Info.plist" 2>/dev/null) || BID_PREFIX=""
+    case "$BID_PREFIX" in *.toggle) BID_PREFIX="${BID_PREFIX%.toggle}" ;; *) BID_PREFIX="" ;; esac
+fi
+BID_PREFIX="${BID_PREFIX:-com.timetracker}"
 
 # The word you type. It is the bundle *filename*, because that is what the
 # launcher displays and matches, so it is also the only thing keeping a
@@ -180,6 +194,7 @@ EOF
         if [[ -n "${TIMETRACK_VERB:-}" ]]; then
             printf 'export TIMETRACK_VERB=%q\n' "$TIMETRACK_VERB"
         fi
+        printf 'export TIMETRACK_BID_PREFIX=%q\n' "$BID_PREFIX"
         printf '%s\n' "$body"
     } > "$macos_dir/run"
     chmod +x "$macos_dir/run"

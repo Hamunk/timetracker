@@ -37,7 +37,7 @@ INSTALLERS = ("install.sh", "uninstall.sh", "sync-apps.sh")
 RUNTIME = ("action.sh", "start.sh", "toggle.sh", "newcat.sh", "settings.sh",
            "pomodoro-watch.sh", "paint-calendar.sh", "spotify.sh",
            "pause-media.sh", "notify.sh", "prompt.sh",
-           "dashboard.py", "migrate_v2.py",
+           "dashboard.py", "migrate.py", "migrate_v2.py",
            "ttprompt", "ttpaint", "ttremind", "ttchat")
 
 # Commands that change what they are pointed at. Every argument is a target,

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Installs the Spotlight edition of TimeTracker:
-#   1. copies the runtime scripts into ~/.timetrack/bin/
-#   2. generates + registers the app bundles in ~/Applications/TimeTracker/
+# Installs TimeTracker, or updates it in place:
+#   1. checks it is safe to: no pomodoro cycle live, no data from a newer version
+#   2. backs up the data and brings it to this version's format (migrate.py)
+#   3. copies the runtime scripts into ~/.timetrack/bin/
+#   4. builds the helpers and registers the launcher bundles
 #
-# Re-run any time to update. Safe to run repeatedly.
+# Re-run any time. It only changes what changed.
 
 set -euo pipefail
 
@@ -15,34 +17,16 @@ esac
 
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 BIN_DIR="$DATA_DIR/bin"
+APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
+VERB="${TIMETRACK_VERB:-time}"
 
-# Reverse-DNS prefix for the helper bundles and the launchd labels. macOS ties
-# TCC permission grants to this identity, so a change here costs one round of
-# re-granting Automation/Calendars/Reminders and nothing else.
-#
-# A scratch install has to override it, and TIMETRACK_DIR alone is not enough
-# to make one safe. Two bundles sharing an identifier are, to LaunchServices
-# and to TCC, the same app: the Automation and Calendars grants you answered
-# for the real one would be handed to whichever copy asked last, and taken
-# from it again just as quietly. Separate data is worth little if a test run
-# can revoke the permissions the real install depends on.
-BID_PREFIX="${TIMETRACK_BID_PREFIX:-com.timetracker}"
-
-mkdir -p "$BIN_DIR"
-# Your log is a record of when you work and what on. On a shared Mac the
-# default 755 would let other local accounts read it.
-chmod 700 "$DATA_DIR"
-
-for f in action.sh notify.sh toggle.sh newcat.sh sync-apps.sh prompt.sh start.sh \
-         settings.sh pomodoro-watch.sh pause-media.sh spotify.sh \
-         paint-calendar.sh; do
-    cp "$SRC_DIR/$f" "$BIN_DIR/$f"
-done
-for f in dashboard.py migrate_v2.py; do
-    cp "$SRC_DIR/$f" "$BIN_DIR/$f"
-done
-
-chmod +x "$BIN_DIR"/*.sh
+NEW_VERSION=$(head -1 "$SRC_DIR/../VERSION" 2>/dev/null || true)
+NEW_VERSION="${NEW_VERSION:-unknown}"
+OLD_VERSION=$(head -1 "$BIN_DIR/VERSION" 2>/dev/null || true)
+if [[ -z "$OLD_VERSION" ]]; then
+    # Everything before 2.0 installed without a VERSION file.
+    if [[ -d "$BIN_DIR" ]]; then OLD_VERSION="1"; else OLD_VERSION="none"; fi
+fi
 
 # Reads a bundle's CFBundleIdentifier, printing nothing if there is no bundle
 # or no key. Used by the rebuild checks: an identifier that no longer matches
@@ -52,27 +36,92 @@ bundle_id_of() {
         "$1/Contents/Info.plist" 2>/dev/null || true
 }
 
+# Reverse-DNS prefix for every bundle. macOS ties TCC permission grants to this
+# identity, so a change here costs one round of re-granting Automation,
+# Calendars and Reminders.
+#
+# Unset, it is the identity the installed bundles already have, read off the
+# toggle — not the default. An update that quietly moved an install from one
+# prefix to another would be a release whose first visible effect is three
+# permission prompts in the middle of a break. A fresh machine has nothing to
+# read and gets the default.
+#
+# A scratch install sets it, and TIMETRACK_DIR alone is not enough to make one
+# safe. Two bundles sharing an identifier are, to LaunchServices and to TCC,
+# the same app: the grants you answered for the real one would be handed to
+# whichever copy asked last, and taken from it again just as quietly.
+BID_PREFIX="${TIMETRACK_BID_PREFIX:-}"
+if [[ -z "$BID_PREFIX" ]]; then
+    for app in "$APPS_DIR"/*.app; do
+        bid=$(bundle_id_of "$app")
+        case "$bid" in *.toggle) BID_PREFIX="${bid%.toggle}"; break ;; esac
+    done
+fi
+BID_PREFIX="${BID_PREFIX:-com.timetracker}"
+# sync-apps.sh bakes it into every bundle it generates, so that a category
+# added later — from the dashboard, or with "time new" — is built under the
+# same identity and not under the default.
+export TIMETRACK_BID_PREFIX="$BID_PREFIX"
+
+# --- is it safe? ---------------------------------------------------------------
+# A live pomodoro cycle is running the watcher script this would replace, and
+# the overlay bundle this would rebuild; the watcher relaunches that overlay
+# by path, so a cycle that outlived its install would come back as a new
+# program speaking to an old one. A plain running timer is fine: it is one
+# line in `state`, and every version reads it.
+if [[ -f "$DATA_DIR/pomodoro" ]]; then
+    IFS=$'\t' read -r _ _ _ _ _ _ wpid < "$DATA_DIR/pomodoro" 2>/dev/null || true
+    if [[ "${wpid:-}" =~ ^[0-9]+$ ]] && kill -0 "$wpid" 2>/dev/null; then
+        printf 'A pomodoro is running. Install again when it has ended.\n'
+        exit 1
+    fi
+fi
+
+mkdir -p "$BIN_DIR"
+# Your log is a record of when you work and what on. On a shared Mac the
+# default 755 would let other local accounts read it.
+chmod 700 "$DATA_DIR"
+
 SESS_HEADER=$'start_iso\tend_iso\tduration_sec\tcategory\tnote\tplan\trecap\tpomodoros\tbreak_overrun_sec'
+CAT_HEADER=$'key\tname\tkeywords\tlast_used_epoch\thidden'
 
 # Seed the data files so the first launch has something to read.
 [[ -f "$DATA_DIR/state" ]] || : > "$DATA_DIR/state"
-CAT_HEADER=$'key\tname\tkeywords\tlast_used_epoch\thidden'
 [[ -f "$DATA_DIR/categories.tsv" ]] || \
     printf '%s\n' "$CAT_HEADER" > "$DATA_DIR/categories.tsv"
 [[ -f "$DATA_DIR/sessions.tsv" ]] || \
     printf '%s\n' "$SESS_HEADER" > "$DATA_DIR/sessions.tsv"
 
-# One-line header upgrade for the pomodoro columns: only if the first line is
-# exactly a known older header — rows are untouched (readers tolerate short
-# rows, per the established plan/recap convention).
-OLD7=$'start_iso\tend_iso\tduration_sec\tcategory\tnote\tplan\trecap'
-OLD5=$'start_iso\tend_iso\tduration_sec\tcategory\tnote'
-first=$(head -1 "$DATA_DIR/sessions.tsv")
-if [[ "$first" == "$OLD7" || "$first" == "$OLD5" ]]; then
-    tmp=$(mktemp "$DATA_DIR/.sessions.XXXXXX")
-    { printf '%s\n' "$SESS_HEADER"; tail -n +2 "$DATA_DIR/sessions.tsv"; } > "$tmp"
-    mv -f "$tmp" "$DATA_DIR/sessions.tsv"
+# Run from the source, not from bin: it is the new version's migrations that
+# have to run, and the new version's ceiling that decides whether this data is
+# too new for it. That refusal comes before a single script is replaced.
+if ! /usr/bin/python3 "$SRC_DIR/migrate.py" --install "$OLD_VERSION" "$NEW_VERSION"; then
+    printf 'Nothing was installed.\n'
+    exit 1
 fi
+
+# Each file goes in beside its old copy and is renamed over it. cp alone
+# rewrites the old file where it stands, and bash reads a script as it runs:
+# a toggle started a moment before would carry on reading the new bytes at
+# the old offsets.
+install_file() {
+    local tmp
+    tmp=$(mktemp "$BIN_DIR/.install.XXXXXX")
+    cp "$1" "$tmp"
+    chmod "$3" "$tmp"
+    mv -f "$tmp" "$BIN_DIR/$2"
+}
+for f in action.sh notify.sh toggle.sh newcat.sh sync-apps.sh prompt.sh start.sh \
+         settings.sh pomodoro-watch.sh pause-media.sh spotify.sh \
+         paint-calendar.sh; do
+    install_file "$SRC_DIR/$f" "$f" 755
+done
+for f in dashboard.py migrate.py; do
+    install_file "$SRC_DIR/$f" "$f" 644
+done
+install_file "$SRC_DIR/../VERSION" VERSION 644
+# Gone in 2.0: its example seed is gone, and the rest of it is migrate.py.
+rm -f "$BIN_DIR/migrate_v2.py"
 
 # --- retire the calendar auto-start ------------------------------------------
 # It read the calendar and started timers off a lecture already under way. It
@@ -98,29 +147,12 @@ rm -f "$BIN_DIR/calendar-agent.sh" "$BIN_DIR/calendar_agent.py" \
       "$DATA_DIR/.calendar-events.tsv" "$DATA_DIR/.calendar-handled" \
       "$DATA_DIR/calendar-agent.log"
 
-# Converts a pre-key categories.tsv and rewrites the log to keys. Backs up
-# both first, and is a no-op once already migrated.
-/usr/bin/python3 "$BIN_DIR/migrate_v2.py"
-
-# Same one-line header upgrade as sessions.tsv above, for the hidden column.
-# Rows keep four fields until something hides them; every reader treats a
-# missing 5th field as "not hidden".
-OLD_CAT=$'key\tname\tkeywords\tlast_used_epoch'
-first=$(head -1 "$DATA_DIR/categories.tsv")
-if [[ "$first" == "$OLD_CAT" ]]; then
-    tmp=$(mktemp "$DATA_DIR/.categories.XXXXXX")
-    { printf '%s\n' "$CAT_HEADER"; tail -n +2 "$DATA_DIR/categories.tsv"; } > "$tmp"
-    mv -f "$tmp" "$DATA_DIR/categories.tsv"
-fi
-
 # --- pomodoro prompt/overlay helper ------------------------------------------
 # A native window with a real checkbox, and the full-screen tomato. Compiled
 # like the calendar helper. It is what pomodoro mode *is*: without swiftc the
 # plan prompt still appears, the tracker is untouched, and the cycle is not
 # offered at all — there is no notifications-only imitation of it.
 
-APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
-VERB="${TIMETRACK_VERB:-time}"
 HELPER_APP="$APPS_DIR/TimeTracker Prompt.app"
 HELPER_BIN="$HELPER_APP/Contents/MacOS/ttprompt"
 if command -v swiftc >/dev/null 2>&1; then
