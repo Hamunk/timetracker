@@ -379,6 +379,7 @@ async function poll(){
     S=d;
     for(const v of document.querySelectorAll(".verb"))v.textContent=v.textContent.replace(/^\w+/,d.verb);
     if(d.setup&&!SETUP.shown)setupOpen();
+    $("fbadge").hidden=!d.requests;$("fbadge").textContent=d.requests||"";
     renderMini();
     const s=JSON.stringify([d.running&&[d.running.key,d.running.start,d.running.plan],
       d.pomodoro&&[d.pomodoro.phase,d.pomodoro.target,d.pomodoro.completed],
@@ -665,9 +666,105 @@ $("s-add").addEventListener("click",addSubject);
 onEnter($("s-name"),addSubject);onEnter($("s-code"),addSubject);
 
 /* ---------- friends ---------- */
-async function loadFriends(){
-  const box=$("p-friends");
-  box.replaceChildren(el("h1",{},"Friends"),el("p",{class:"lead"},"Coming in the next step."));
+// The chat helper holds the friendships; this draws what `ttchat list` says
+// and sends it what was pressed. Looking in the inbox reaches the relay, so it
+// happens when the page is opened and twice a minute while it stays open,
+// not on every redraw.
+let fOpen=null,fSig="",inboxAt=0;
+async function loadFriends(force){
+  if(force||Date.now()-inboxAt>30000){inboxAt=Date.now();post("/api/friends/refresh",{}).then(r=>{
+    if(r.ok&&r.message)toast(r.message);if(page==="friends")loadFriends();});}
+  try{F=await get("/api/friends");}catch(e){return;}
+  const n=(F.requests||[]).length;
+  $("fbadge").hidden=!n;$("fbadge").textContent=n;
+  const sig=JSON.stringify(F);
+  if(!force&&(sig===fSig||document.querySelector("#p-friends input:focus")))return;
+  fSig=sig;
+  renderFriends();
+}
+function where(f){
+  const now=Date.now()/1000,m=s=>Math.max(0,Math.floor(s/60));
+  if(!f.ph)return "";
+  if(f.ph==="off")return "Not in a pomodoro";
+  if(now>f.until+(f.ph==="work"?1200:10800))return "";
+  const len=Math.max(0,f.until-f.since);
+  if(f.ph==="work")return "Working · "+Math.min(m(now-f.since),m(len))+" of "+m(len)+" min";
+  if(now>f.until)return "On a break · "+m(now-f.until)+" min over";
+  return "On a break · "+m(now-f.since)+" of "+m(len)+" min";
+}
+function renderFriends(){
+  const box=$("p-friends"),out=[el("h1",{},"Friends")];
+  if(!F.installed){box.replaceChildren(...out,el("p",{class:"lead"},
+    "Messages needs the Xcode command line tools. Install them, then update TimeTracker."));return;}
+  const tog=el("input",{type:"checkbox"});tog.checked=!!F.on;
+  tog.addEventListener("change",async()=>{
+    const r=await post("/api/setconf",{changes:{chat:tog.checked?"on":"off"}});
+    if(!r.ok)toast(r.message,true);loadFriends(true);});
+  out.push(el("p",{class:"lead"},"See where friends are in their pomodoro, and write to them on breaks."));
+  out.push(el("div",{class:"list"},el("div",{class:"set"},el("span",{class:"lbl"},"Messages",
+    el("small",{},"Messages are encrypted and pass through a public relay, ntfy.sh. It sees when you start and end breaks.")),
+    el("label",{class:"toggle"},tog,el("span",{})))));
+  if(!F.on){box.replaceChildren(...out);return;}
+  if(!F.me){
+    const u=el("input",{type:"text",maxlength:"24",placeholder:"Your username"});
+    const save=async()=>{const r=await post("/api/friends/name",{name:u.value.trim()});
+      toast(r.message,!r.ok);if(r.ok)loadFriends(true);};
+    onEnter(u,save);
+    out.push(el("h2",{},"Your username"),el("div",{class:"form",style:"padding-left:4px;border:0"},
+      el("div",{class:"line"},u,el("button",{class:"btn primary",onclick:save},"Save")),
+      el("span",{class:"mut",style:"font-size:12.5px"},"Friends add you by it. Letters, digits, dots and dashes.")));
+    box.replaceChildren(...out);setTimeout(()=>u.focus(),0);return;
+  }
+  const reqs=F.requests||[];
+  if(reqs.length){
+    out.push(el("h2",{},"Requests"));
+    const l=el("div",{class:"list"});
+    for(const q of reqs){
+      const acc=el("button",{class:"btn primary"},"Accept");
+      acc.addEventListener("click",async()=>{acc.disabled=true;acc.textContent="…";
+        const r=await post("/api/friends/accept",{id:q.id});toast(r.message,!r.ok);loadFriends(true);});
+      l.append(el("div",{class:"item"},dot(q.u),el("span",{class:"title"},q.u,
+        el("span",{class:"mut"}," wants to be friends")),
+        el("button",{class:"btn quiet",onclick:async()=>{await post("/api/friends/ignore",{id:q.id});loadFriends(true);}},"Ignore"),acc));
+    }
+    out.push(l);
+  }
+  const user=el("input",{type:"text",maxlength:"24",placeholder:"Their username"});
+  const add=async()=>{const v=user.value.trim();if(!v){user.focus();return;}
+    const r=await post("/api/friends/add",{user:v});toast(r.message,!r.ok);
+    if(r.ok){user.value="";loadFriends(true);}};
+  onEnter(user,add);
+  const pend=(F.pending||[]).map(p=>p.u);
+  out.push(el("h2",{},"Add a friend"),el("div",{class:"form",style:"padding-left:4px;border:0"},
+    el("div",{class:"line"},user,el("button",{class:"btn primary",onclick:add},"Add")),
+    el("span",{class:"mut",style:"font-size:12.5px"},"You are ",el("b",{class:"sel"},F.me),". ",
+      pend.length?"Waiting for "+pend.join(", ")+".":"They accept, and you're friends.")));
+  const fr=F.friends||[];
+  out.push(el("h2",{},"Friends"));
+  const l=el("div",{class:"list"});
+  if(!fr.length)l.append(el("p",{class:"empty"},"No friends yet."));
+  for(const f of fr){
+    const row=el("div",{class:"item click"+(fOpen===f.id?" open":"")},dot(f.u||f.n),
+      el("span",{class:"title"},f.n,f.u&&f.u!==f.n?el("span",{class:"mut",style:"margin-left:8px;font-size:12.5px"},f.u):null),
+      el("span",{class:"meta"},where(f)));
+    row.addEventListener("click",()=>{fOpen=fOpen===f.id?null:f.id;renderFriends();});
+    l.append(row);
+    if(fOpen!==f.id)continue;
+    const nm=el("input",{type:"text",value:f.n,maxlength:"40"});
+    const ren=async()=>{const r=await post("/api/friends/rename",{id:f.id,name:nm.value.trim()});
+      toast(r.message,!r.ok);loadFriends(true);};
+    onEnter(nm,ren);
+    const rm=el("button",{class:"btn danger"},"Remove");
+    rm.addEventListener("click",()=>arm(rm,"Remove?",async()=>{
+      const r=await post("/api/friends/remove",{id:f.id});toast(r.message,!r.ok);fOpen=null;loadFriends(true);}));
+    l.append(el("div",{class:"form"},el("div",{class:"line"},nm,
+      el("button",{class:"btn",onclick:ren},"Rename")),
+      el("div",{class:"line"},el("span",{class:"mut",style:"font-size:12.5px"},
+        "Safety check ",el("span",{style:"font-size:15px;letter-spacing:2px"},f.check||""),
+        " — the same four on both Macs means nobody is in between."),el("span",{class:"spacer"}),rm)));
+  }
+  out.push(l);
+  box.replaceChildren(...out);
 }
 
 /* ---------- settings ---------- */

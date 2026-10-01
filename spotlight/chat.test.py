@@ -19,6 +19,9 @@ install chats from. Not something to run in a loop.
 
 TTCHAT_BIN=<path> skips the compile.
 """
+import base64
+import hashlib
+import hmac
 import json
 import os
 import queue
@@ -340,6 +343,7 @@ def local():
         b.close()
         b.p.wait(timeout=5)
 
+        names(relay)
         break_mode(relay, peers)
     finally:
         for p in peers:
@@ -394,8 +398,21 @@ def friend(s, name):
 
 def room(d):
     return subprocess.Popen([BIN, "break", d], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            env=dict(os.environ, TTCHAT_CLIPBOARD="off"))
+                            stderr=subprocess.DEVNULL)
+
+
+def cli(*args):
+    """One of the app's commands: (exit status, the line it printed)."""
+    p = subprocess.run([BIN] + list(args), capture_output=True, text=True, timeout=30)
+    return p.returncode, p.stdout.strip()
+
+
+def listing(d):
+    return json.loads(cli("list", d)[1])
+
+
+def code_of(d, user):
+    return next((r[2] for r in rows(d, "friends.tsv") if len(r) > 4 and r[4] == user), None)
 
 
 def rows(d, name):
@@ -412,6 +429,102 @@ def new_room_dir(relay):
     with open(os.path.join(d, "chat-relay"), "w") as f:
         f.write(relay + "\n")
     return d
+
+
+def hkdf(ikm, salt, info, n):
+    """RFC 5869 with SHA-256: the derivation, done again here independently."""
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    out, t, i = b"", b"", 1
+    while len(out) < n:
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        out += t
+        i += 1
+    return out[:n]
+
+
+def inbox_topic(user):
+    raw = hkdf(("user:" + user).encode(), b"timetracker-inbox-v1", b"topic", 18)
+    return "tu" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def names(relay):
+    """Friends by username: the exchange, and what it refuses."""
+    print("friends by name")
+    a, b = new_room_dir(relay), new_room_dir(relay)
+    check("adding before you have a username is refused, and says why",
+          cli("add", a, "bob") == (1, "Choose your username first"))
+    for bad in ("a", "has space", "-dash", "æøå", "x" * 25, ""):
+        if cli("setname", a, bad)[0] != 1:
+            check("a username like %r is refused" % bad, False)
+    check("usernames that are not a-z, digits, . - _, 2 to 24 long, are refused", True)
+    check("a username is lowercased", cli("setname", a, "Alice.N") == (0, "Your username is alice.n"))
+    cli("setname", b, "bob")
+    check("adding yourself is refused", cli("add", a, "ALICE.N")[0] == 1)
+    tap = Tap(relay, inbox_topic("bob"))
+    check("a request goes out", cli("add", a, "bob") == (0, "Request sent to bob"))
+    check("and is pending on the asking side",
+          [p["u"] for p in listing(a)["pending"]] == ["bob"])
+    cli("add", a, "bob")
+    cli("inbox", b)
+    reqs = listing(b)["requests"]
+    check("the other side finds it in its inbox, once however often it was sent",
+          [q["u"] for q in reqs] == ["alice.n"])
+    time.sleep(0.3)
+    check("the relay saw sealed blobs at bob's inbox, never a key or a name in the clear",
+          len(tap.bodies) == 2 and all(x.startswith("tt3:") for x in tap.bodies)
+          and not any("alice" in x for x in tap.bodies))
+    tap.kill()
+    rc, msg = cli("accept", b, reqs[0]["id"] if reqs else "0" * 16)
+    check("accepting says so", rc == 0 and msg == "You and alice.n are friends")
+    rc, msg = cli("inbox", a)
+    check("the asker finds the answer, and says so", rc == 0 and msg == "You and bob are friends")
+    check("both ends hold the same secret, and neither request is left",
+          code_of(a, "bob") is not None and code_of(a, "bob") == code_of(b, "alice.n")
+          and not listing(a)["pending"] and not listing(b)["requests"])
+    check("the key, the name and the book are private",
+          all(private(a, n) for n in ("chat-key", "chat-name", "friends.tsv",
+                                      "chat-requests.tsv")))
+    check("asking again is refused", cli("add", a, "bob") == (1, "You are already friends with bob"))
+
+    print("friends by name: crossing, ignoring, answers nobody asked for")
+    c, e = new_room_dir(relay), new_room_dir(relay)
+    cli("setname", c, "carl")
+    cli("setname", e, "eve")
+    cli("add", c, "eve")
+    cli("add", e, "carl")
+    cli("inbox", c)
+    cli("inbox", e)
+    check("two requests that cross are two acceptances",
+          code_of(c, "eve") is not None and code_of(c, "eve") == code_of(e, "carl"))
+    cli("add", a, "carl")
+    cli("inbox", c)
+    rid = listing(c)["requests"][0]["id"]
+    check("ignoring a request removes it", cli("ignore", c, rid)[0] == 0
+          and listing(c)["requests"] == [] and code_of(c, "alice.n") is None)
+    x, twin, q = new_room_dir(relay), new_room_dir(relay), new_room_dir(relay)
+    cli("setname", x, "xena")
+    cli("setname", twin, "xena")
+    cli("setname", q, "quinn")
+    cli("add", twin, "quinn")
+    cli("inbox", q)
+    cli("accept", q, listing(q)["requests"][0]["id"])
+    cli("inbox", x)
+    check("an answer to a request this Mac never made is dropped",
+          listing(x)["friends"] == [])
+    cli("inbox", twin)
+    check("while the Mac that asked gets its friend", code_of(twin, "quinn") is not None)
+
+    print("friends by name: a friend made with a code, from before")
+    old = new_room_dir(relay)
+    code = new_code()
+    with open(os.path.join(old, "friends.tsv"), "w") as f:
+        f.write("id\tname\tcode\tadded\n0123abcd\tMalin\t%s\t1790000000\n" % code)
+    fr = listing(old)["friends"]
+    check("reads as a friend, with no username", [(f["n"], f["u"]) for f in fr] == [("Malin", "")])
+    cli("rename", old, "0123abcd", "Malin H")
+    check("renaming keeps the secret, and writes the new column",
+          rows(old, "friends.tsv")[0][1:3] == ["Malin H", code]
+          and len(rows(old, "friends.tsv")[0]) == 5)
 
 
 def break_mode(relay, peers):
@@ -436,70 +549,94 @@ def break_mode(relay, peers):
     check("this Mac's sender id is made once, and kept private",
           re.fullmatch(r"[0-9a-f]{16}", me) is not None and private(d, "chat-self"))
 
-    print("break mode: pairing, and writing any time")
-    command(d, "invite\tKari")
-    s = state(d, lambda s: s["note"] and s["note"]["k"] == "invited")
-    kari = s["note"]["id"] if s else "?"
-    check("making a code adds the friend, by a non-secret id",
-          s is not None and [f["n"] for f in s["friends"]] == ["Kari"]
-          and re.fullmatch(r"[0-9a-f]{8}", kari) is not None)
+    print("break mode: a request, accepted on the break screen")
+    command(d, "add\tkari")
+    s = state(d, lambda s: s["note"] and s["note"]["k"] == "bad")
+    check("without a username of your own, adding is refused, and says why",
+          s is not None and "username" in s["note"]["x"])
+    command(d, "setname\tMeg")
+    check("a username, lowercased", state(d, lambda s: s["me"] == "meg") is not None)
+    kd = new_room_dir(relay)
+    cli("setname", kd, "kari")
+    cli("add", kd, "meg")
+    # The room looks in its inbox as a break begins; this one has begun, so
+    # a new break is the quickest way to make it look.
+    r.send_signal(15)
+    r.wait(timeout=6)
+    r = room(d)
+    s = state(d, lambda s: [q["u"] for q in s.get("requests", [])] == ["kari"], timeout=10)
+    check("Kari's request is on the break screen", s is not None)
+    command(d, "accept\t%s" % (s["requests"][0]["id"] if s else "0" * 16))
+    s = state(d, lambda s: [f["n"] for f in s["friends"]] == ["kari"] and not s["requests"])
+    kari = friend(s, "kari")["id"] if s else "?"
+    check("accepting makes Kari a friend, by a non-secret id",
+          s is not None and re.fullmatch(r"[0-9a-f]{8}", kari) is not None)
     fr = rows(d, "friends.tsv")
-    check("friends.tsv holds the code, and only its owner can read it",
+    check("friends.tsv holds the secret, and only its owner can read it",
           len(fr) == 1 and CODE.match(fr[0][2]) and private(d, "friends.tsv"))
     command(d, "send\t%s\tvelkommen, Kari" % kari)
-    check("a message to Kari before Kari has even pasted the code is accepted",
+    check("a message to Kari before Kari's Mac has even heard the answer is accepted",
           state(d, lambda s: any(m["x"] == "velkommen, Kari" and m["s"] == "sent"
                                  for m in s["log"])) is not None)
-    check("the state file the overlay reads carries no code",
+    check("the state file the overlay reads carries no secret",
           "tt1-" not in open(os.path.join(d, ".tomato-chat")).read())
+    check("Kari's Mac finds the answer in its inbox",
+          cli("inbox", kd)[0] == 0 and code_of(kd, "meg") == fr[0][2])
 
-    k = Peer(relay, fr[0][2])
+    k = Peer(relay, code_of(kd, "meg"))
     peers.append(k)
-    check("Kari pastes the code, and finds the message waiting",
+    check("Kari opens Messages, and finds the message waiting",
           k.next(text("velkommen, Kari"), 10) is not None)
-    s = state(d, lambda s: friend(s, "Kari")["ph"] == "break")
+    s = state(d, lambda s: friend(s, "kari")["ph"] == "break")
     check("you see Kari on a break, since a moment ago",
-          s is not None and 0 <= time.time() - friend(s, "Kari")["since"] < 30)
+          s is not None and 0 <= time.time() - friend(s, "kari")["since"] < 30)
     k.say("takk! pause nå?")
-    s = state(d, lambda s: friend(s, "Kari")["unread"] == 1)
+    s = state(d, lambda s: friend(s, "kari")["unread"] == 1)
     check("Kari's answer is in your log, against Kari's id, unread",
           s is not None and any(m["x"] == "takk! pause nå?" and m["f"] == kari
                                 and not m["me"] for m in s["log"]))
     top = max(m["q"] for m in s["log"]) if s else 0
     command(d, "read\t%s\t%d" % (kari, top))
     check("reading it clears the count",
-          state(d, lambda s: friend(s, "Kari")["unread"] == 0) is not None)
+          state(d, lambda s: friend(s, "kari")["unread"] == 0) is not None)
     k.say("/work 25")
-    s = state(d, lambda s: friend(s, "Kari")["ph"] == "work")
+    s = state(d, lambda s: friend(s, "kari")["ph"] == "work")
     check("Kari goes back to work: you see it, and when the work is planned to end",
-          s is not None and friend(s, "Kari")["until"] - friend(s, "Kari")["since"] == 1500)
+          s is not None and friend(s, "kari")["until"] - friend(s, "kari")["since"] == 1500)
 
-    other = new_code()
-    command(d, "join\tOla\t%s" % other)
-    s = state(d, lambda s: s["note"]["k"] == "joined")
-    ola = s["note"]["id"] if s else "?"
-    check("pasting a friend's code adds them",
-          s is not None and [f["n"] for f in s["friends"]] == ["Kari", "Ola"])
+    print("break mode: the app changes friends in the middle of a break")
+    od = new_room_dir(relay)
+    cli("setname", od, "ola")
+    rc, msg = cli("add", d, "ola")
+    check("the app asks Ola", rc == 0 and msg == "Request sent to ola")
+    cli("inbox", od)
+    oid = listing(od)["requests"][0]["id"] if listing(od)["requests"] else "0" * 16
+    check("Ola's Mac accepts", cli("accept", od, oid)[0] == 0)
+    check("the app finds the answer", cli("inbox", d)[0] == 0)
+    s = state(d, lambda s: [f["n"] for f in s["friends"]] == ["kari", "ola"])
+    ola = friend(s, "ola")["id"] if s else "?"
+    check("and the break, already under way, has Ola within a second", s is not None)
     command(d, "send\t%s\tfor Ola, whenever" % ola)
     check("a message to Ola, who is nowhere, is sent all the same",
           state(d, lambda s: any(m["x"] == "for Ola, whenever" and m["s"] == "sent"
                                  for m in s["log"])) is not None)
     time.sleep(0.5)
-    o = Peer(relay, other)
+    o = Peer(relay, code_of(od, "meg"))
     peers.append(o)
     check("Ola turns up later, and it is waiting",
           o.next(text("for Ola, whenever"), 10) is not None)
     o.close()
-    command(d, "join\tOla again\t%s" % other)
-    s = state(d, lambda s: s["note"]["k"] == "bad")
-    check("the same code twice is refused, by name",
-          s is not None and "Ola" in s["note"]["x"] and len(s["friends"]) == 2)
-    command(d, "join\tHalf\t%s" % other[:30])
-    s = state(d, lambda s: s["note"]["k"] == "bad" and "whole" in s["note"]["x"])
-    check("half a code is refused", s is not None and len(s["friends"]) == 2)
+    rc, _ = cli("rename", d, ola, "Ola Nordmann")
+    s = state(d, lambda s: friend(s, "Ola Nordmann") is not None)
+    check("renamed in the app, renamed on the break screen, and still ola underneath",
+          rc == 0 and s is not None and friend(s, "Ola Nordmann")["u"] == "ola")
+    command(d, "add\tola")
+    s = state(d, lambda s: s["note"]["k"] == "bad" and "already" in s["note"]["x"])
+    check("asking a friend again is refused, by name", s is not None)
 
     for junk in ("send\tnot-an-id\thei", "run\topen -a Calculator", "copy\t../../x",
-                 "forget\tKari", "read\t%s\tlots" % kari, "\t\t\t"):
+                 "forget\tKari", "read\t%s\tlots" % kari, "\t\t\t", "join\tX\ttt1-AAAA",
+                 "accept\t../../etc", "rename\t%s" % kari):
         command(d, junk)
     time.sleep(0.6)
     s = state(d)
@@ -507,15 +644,17 @@ def break_mode(relay, peers):
           r.poll() is None and s is not None and len(s["friends"]) == 2)
 
     command(d, "forget\t%s" % ola)
-    s = state(d, lambda s: s["note"]["k"] == "forgot")
+    s = state(d, lambda s: [f["n"] for f in s["friends"]] == ["kari"])
     check("removing a friend removes their row, and what was said with them",
-          s is not None and [f["n"] for f in s["friends"]] == ["Kari"]
-          and len(rows(d, "friends.tsv")) == 1
-          and not any(row[1] == ola for row in rows(d, "chat-log.tsv")))
+          s is not None and len(rows(d, "friends.tsv")) == 1
+          and state(d, lambda s: not any(m["f"] == ola for m in s["log"])) is not None)
+    time.sleep(0.5)
+    check("and chat-log.tsv forgets them too",
+          not any(row[1] == ola for row in rows(d, "chat-log.tsv")))
 
     print("break mode: your own status, handed back")
     k.say("/break 5")
-    state(d, lambda s: friend(s, "Kari")["ph"] == "break")
+    state(d, lambda s: friend(s, "kari")["ph"] == "break")
     t = int(time.time())
     one = subprocess.run([BIN, "status", d, "work", str(t), str(t + 1500)], timeout=20)
     got = k.next(status("work"), 10)
@@ -523,7 +662,7 @@ def break_mode(relay, peers):
           one.returncode == 0 and got is not None and got[3:5] == [str(t), str(t + 1500)])
     time.sleep(1.5)
     check("and when the relay hands it back to you, it is not taken for Kari's",
-          friend(state(d), "Kari")["ph"] == "break")
+          friend(state(d), "kari")["ph"] == "break")
 
     print("break mode: the end of the break, and the next one")
     pomo(d, "WORK")
@@ -539,7 +678,7 @@ def break_mode(relay, peers):
     r = room(d)
     s = state(d, lambda s: any(m["x"] == "skrev mens du jobbet" for m in s["log"]))
     check("next break: what Kari wrote while you worked is there, unread",
-          s is not None and friend(s, "Kari")["unread"] == 1)
+          s is not None and friend(s, "kari")["unread"] == 1)
     check("and nothing from before arrived twice",
           s is not None and sum(1 for m in s["log"] if m["x"] == "takk! pause nå?") == 1)
     with open(os.path.join(d, "chat-self")) as f:
@@ -571,12 +710,8 @@ def lag(peers):
         d = new_room_dir(relay)
         pomo(d, "BREAK")
         code = new_code()
-        r = room(d)
-        state(d)
-        command(d, "join\tPer\t%s" % code)
-        state(d, lambda s: s["note"] and s["note"]["k"] == "joined")
-        r.send_signal(15)
-        r.wait(timeout=6)
+        with open(os.path.join(d, "friends.tsv"), "w") as f:
+            f.write("id\tname\tcode\tadded\n00c0ffee\tPer\t%s\t1790000000\n" % code)
         p = Peer(relay, code)
         peers.append(p)
         p.next(kind("open"))

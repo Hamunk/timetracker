@@ -379,6 +379,7 @@ def build_state():
         "week": week_t,
         "subjects": subjects(cats, rows, state and state["key"]),
         "setup": needs_setup(),
+        "requests": waiting_requests(),
         "verb": VERB,
         "now": now,
     }
@@ -842,8 +843,25 @@ def post_friends(verb, *fields):
         args = [text(f, 60) for f in fields]
         if any(not a for a in args):
             return False, "Bad fields"
+        # With Messages off nothing here may reach the relay, whatever the
+        # page asks: off is the promise that nothing talks to the internet.
+        if setting("chat", "off") != "on":
+            return False, "Turn on Messages first"
         return chat(verb, DATA_DIR, *args)
     return handler
+
+
+def waiting_requests():
+    """How many friend requests are waiting: the sidebar's badge.
+
+    Read straight from the chat helper's file rather than by running it,
+    because this is asked every two seconds.
+    """
+    try:
+        with open(os.path.join(DATA_DIR, "chat-requests.tsv"), encoding="utf-8") as f:
+            return sum(1 for line in f if line.startswith("in\t"))
+    except OSError:
+        return 0
 
 
 def post_friends_refresh(text, whole, body):

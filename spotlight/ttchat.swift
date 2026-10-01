@@ -18,16 +18,50 @@
 // does where you are in your cycle. Nothing here runs during a work session
 // except, at each change of phase, a moment's post of that change.
 //
-// A friendship is one 32-byte secret, made on one Mac and carried to the
-// other privately, by whatever the two of you already trust. Everything else
-// is derived from it: the topic both use, and the key every message is sealed
-// with. Nothing that says who you are is ever outside the seal.
+// A friendship is one 32-byte secret. Everything else is derived from it: the
+// topic both use, and the key every message is sealed with. Nothing that says
+// who you are is ever outside the seal.
+//
+// How the two Macs come to share it is the part that changed. It used to be
+// made on one Mac and carried to the other by hand, as a code of fifty-odd
+// characters: copied from a break screen that covers the whole display, sent
+// some other way, pasted into a break screen on the other side. It was secure
+// and nearly impossible to explain. Now each Mac has a username and a
+// Curve25519 key, and a friend request is a public key left at a mailbox the
+// other's username names:
+//
+//   1. You add "malin". Your public key, and your username, go to the topic
+//      derived from "malin" — her inbox.
+//   2. Her Mac finds the request there. She accepts; her Mac derives the
+//      secret from her private key and yours, and leaves her public key in
+//      your inbox.
+//   3. Your Mac finds that, and derives the same secret from your private key
+//      and hers.
+//
+// The relay sees two public keys and two usernames, and can make nothing of
+// them: Diffie-Hellman is exactly the problem of getting from those to the
+// secret. What it does not stop is somebody who knows both usernames sending
+// a request that claims to come from one of them, which is why a request is
+// something you accept, not something that happens to you. SECURITY.md has
+// the rest. Friends made with a code before this are untouched: the secret is
+// the same kind of thing either way, and friends.tsv stores it the same way.
 //
 //   ttchat break <dir>           the break's chat, started by pomodoro-watch.sh
 //                                when a break begins; exits when it ends
 //   ttchat status <dir> <phase> <since> <until>
 //                                post where you are in your cycle to every
-//                                friend, and exit. The watcher's, at each change
+//                                friend, look in your inbox, and exit. The
+//                                watcher's, at each change of phase
+//   ttchat list <dir>            friends, requests and your username, as JSON;
+//                                reads files only. The app's
+//   ttchat setname <dir> <name>  your username
+//   ttchat add <dir> <user>      ask somebody to be friends
+//   ttchat accept|ignore <dir> <request id>
+//   ttchat rename <dir> <id> <name>
+//   ttchat forget <dir> <id>
+//   ttchat inbox <dir>           collect requests and answers, and exit
+//                                (all six print one line for the app to show,
+//                                and exit 1 when it says no)
 //   ttchat code                  a fresh pairing code, on stdout
 //   ttchat peer <relay> <code>   one friendship, headless: a friend on a break,
 //                                in a terminal. Each stdin line is sent, except
@@ -44,8 +78,14 @@
 // Break mode's files, all in <dir>, all fixed names, all 600, all written by
 // this program and no other:
 //
-//   friends.tsv          id, name, code, added. The codes are the friendships;
-//                        nothing else in TimeTracker reads one.
+//   friends.tsv          id, name, code, added, username. The codes are the
+//                        friendships; nothing else in TimeTracker reads one.
+//                        The name is yours to change; the username is theirs.
+//   chat-requests.tsv    requests waiting: in (asking you) and out (yours)
+//   chat-name            your username
+//   chat-key             your Curve25519 private key, made once
+//   .chat-book.lock      held while friends.tsv or the requests change: the
+//                        app and a break's chat can both change them
 //   chat-log.tsv         what you and your friends have said, the latest few
 //                        hundred lines per friend
 //   chat-sync.tsv        per friend: how far into the relay's history this Mac
@@ -68,7 +108,6 @@
 //   down   <detail>                       the stream broke; retrying
 //   error  <detail>                       the relay refused something we sent
 
-import AppKit
 import CryptoKit
 import Foundation
 
@@ -126,10 +165,15 @@ func unb64url(_ s: String) -> Data? {
 // "tt1-" + base64url(secret ‖ the first two bytes of its SHA-256). The check
 // bytes are for the paste that lost its last character: without them a
 // truncated code is simply a different secret, and the symptom would be a
-// friend who never hears from you, forever, with nothing to say why.
+// friend who never hears from you, forever, with nothing to say why. Nobody
+// pastes one any more, but friends.tsv still stores every friendship this
+// way, the ones made by name included.
+func codeFor(_ secret: Data) -> String {
+    return codePrefix + b64url(secret + Data(SHA256.hash(data: secret).prefix(2)))
+}
+
 func newCode() -> String {
-    let raw = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-    return codePrefix + b64url(raw + Data(SHA256.hash(data: raw).prefix(2)))
+    return codeFor(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) })
 }
 
 func parseCode(_ s: String) -> Data? {
@@ -255,10 +299,13 @@ func selfID(_ dir: String) -> String {
 
 struct Friend {
     let id: String
-    let name: String
+    var name: String
     let code: String
     let secret: Data
     let added: Int
+    // Their username, for a friend made by name; empty for one made with a
+    // code, who never had one as far as this Mac knows.
+    let user: String
 }
 
 func loadFriends(_ dir: String) -> [Friend] {
@@ -275,10 +322,17 @@ func loadFriends(_ dir: String) -> [Friend] {
               !out.contains(where: { $0.id == f[0] || $0.secret == s }) else { continue }
         out.append(Friend(id: f[0], name: name,
                           code: f[2].trimmingCharacters(in: .whitespaces), secret: s,
-                          added: f.count > 3 ? Int(f[3]) ?? 0 : 0))
+                          added: f.count > 3 ? Int(f[3]) ?? 0 : 0,
+                          user: f.count > 4 ? normUser(f[4]) ?? "" : ""))
         if out.count == maxFriends { break }
     }
     return out
+}
+
+func saveFriends(_ dir: String, _ friends: [Friend]) {
+    var s = "id\tname\tcode\tadded\tusername\n"
+    for f in friends { s += "\(f.id)\t\(f.name)\t\(f.code)\t\(f.added)\t\(f.user)\n" }
+    writePrivate(dir + "/friends.tsv", Data(s.utf8))
 }
 
 // One friendship.
@@ -548,34 +602,397 @@ final class Chat: NSObject, URLSessionDataDelegate {
     }
 }
 
+// --- usernames, keys and the inbox -------------------------------------------
+// See the top of this file for the exchange; this is its machinery.
+//
+// A username is two to twenty-four of a-z, 0-9, dot, dash and underscore,
+// compared without case. It names a topic, so it is also the address strangers
+// can write to, and nothing about it is secret: anybody who knows it can find
+// your inbox, read what is waiting there, and leave a request in it.
+
+let userChars = Set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+let inboxPrefix = "tt3:"
+let maxRequests = 40
+
+func normUser(_ s: String) -> String? {
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard (2...24).contains(t.count), t.allSatisfy({ userChars.contains($0) }),
+          let first = t.first, first.isLetter || first.isNumber else { return nil }
+    return t
+}
+
+func readName(_ dir: String) -> String? {
+    return (try? String(contentsOfFile: dir + "/chat-name", encoding: .utf8)).flatMap(normUser)
+}
+
+// This Mac's private key, made once and kept. Made with O_EXCL for the same
+// reason chat-self is: the app and a break's chat can both be the first to
+// need it, and two keys would answer one request two different ways. One that
+// will not read is replaced, which costs only the requests still waiting on
+// it — the friendships themselves keep the secret, not the key.
+func myKey(_ dir: String) -> Curve25519.KeyAgreement.PrivateKey? {
+    let p = dir + "/chat-key"
+    for _ in 0..<3 {
+        if let s = try? String(contentsOfFile: p, encoding: .utf8) {
+            if let d = Data(base64Encoded: s.trimmingCharacters(in: .whitespacesAndNewlines)),
+               let k = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: d) { return k }
+            unlink(p)
+        }
+        let fd = open(p, O_CREAT | O_EXCL | O_WRONLY, 0o600)
+        if fd >= 0 {
+            let k = Curve25519.KeyAgreement.PrivateKey()
+            let line = k.rawRepresentation.base64EncodedString() + "\n"
+            _ = line.withCString { write(fd, $0, strlen($0)) }
+            close(fd)
+            return k
+        }
+        usleep(50_000)
+    }
+    return nil
+}
+
+// A username's inbox: the topic it names, and a key to seal what is left
+// there. The key keeps the relay from reading requests at a glance, and no
+// more than that — it is derived from the username, which is not a secret.
+func inboxFor(_ user: String) -> (topic: String, key: SymmetricKey) {
+    let ikm = SymmetricKey(data: Data(("user:" + user).utf8))
+    let salt = Data("timetracker-inbox-v1".utf8)
+    let t = HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, salt: salt,
+                                   info: Data("topic".utf8), outputByteCount: 18)
+    let k = HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, salt: salt,
+                                   info: Data("key".utf8), outputByteCount: 32)
+    return ("tu" + b64url(t.withUnsafeBytes { Data($0) }), k)
+}
+
+// The friendship's secret, from my private key and their public one. Both
+// public keys go into the derivation, in an order both sides agree on, so the
+// secret belongs to this pair of keys and to no other. A public key that
+// makes the shared value all zeros (the small-subgroup points X25519 lets
+// through) is refused: every such request would share one secret.
+func pairSecret(_ mine: Curve25519.KeyAgreement.PrivateKey, _ theirs: Data) -> Data? {
+    guard theirs.count == 32,
+          let pub = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: theirs),
+          let shared = try? mine.sharedSecretFromKeyAgreement(with: pub),
+          shared.withUnsafeBytes({ $0.contains { $0 != 0 } }) else { return nil }
+    let a = mine.publicKey.rawRepresentation
+    let info = a.lexicographicallyPrecedes(theirs) ? a + theirs : theirs + a
+    return shared.hkdfDerivedSymmetricKey(using: SHA256.self,
+                                          salt: Data("timetracker-pair-v1".utf8),
+                                          sharedInfo: info, outputByteCount: 32)
+        .withUnsafeBytes { Data($0) }
+}
+
+// Four symbols from the secret, the same on both Macs. A request names who it
+// is from but cannot prove it, so somebody who knows both usernames could
+// answer one before its rightful owner does; the two Macs would then hold
+// different secrets, and these would differ. Compared side by side, or read
+// out over a call, they settle it. Nobody has to: they are there for the
+// friend you are not sure of.
+let checkSymbols = Array("🍅🌲🚲🐟🍋🐝🌙🎈🔑🧦🍄🐢🦊🐳🍉🍇🥕🌵🌻🍁🐞🦉🐙🦀🐸🐧🎸🥁📚🧲🚀🚂🌋🔥💧🌈🍪🧀🍩🥨🍿🧩🎲🎯🔔📷💡🧭🧸🎩👟🧤🎒🛶🐌🦋🐘🦒🍒🥝🥑🌽🍞🧁")
+
+func checkFor(_ secret: Data) -> String {
+    let h = Array(SHA256.hash(data: Data("timetracker-check".utf8) + secret))
+    return (0..<4).map { String(checkSymbols[Int(h[$0]) % checkSymbols.count]) }
+        .joined(separator: " ")
+}
+
+// One synchronous request, for the commands that run and exit. Fifteen
+// seconds, the same as a post from a break.
+func fetchSync(_ req: URLRequest) -> (Int, Data?) {
+    let done = DispatchSemaphore(value: 0)
+    var code = 0
+    var body: Data?
+    URLSession(configuration: quiet()).dataTask(with: req) { d, r, _ in
+        code = (r as? HTTPURLResponse)?.statusCode ?? 0
+        body = d
+        done.signal()
+    }.resume()
+    if done.wait(timeout: .now() + 20) == .timedOut { return (0, nil) }
+    return (code, body)
+}
+
+// A request ("req") or an answer ("ok") into somebody's inbox:
+//   {"v":3, "k":req|ok, "u":my username, "p":my public key, "i":id, "t":now,
+//    "re": the request an answer answers}
+func inboxSend(_ relay: URL, to user: String, _ fields: [String: Any]) -> Bool {
+    let (topic, key) = inboxFor(user)
+    var env: [String: Any] = ["v": 3, "i": randomID(), "t": now()]
+    for (k, v) in fields { env[k] = v }
+    guard let plain = try? JSONSerialization.data(withJSONObject: env),
+          let box = try? ChaChaPoly.seal(plain, using: key, authenticating: Data(topic.utf8))
+    else { return false }
+    var req = URLRequest(url: relay.appendingPathComponent(topic))
+    req.httpMethod = "POST"
+    req.httpBody = Data((inboxPrefix + box.combined.base64EncodedString()).utf8)
+    req.setValue("no", forHTTPHeaderField: "Firebase")
+    req.timeoutInterval = 15
+    return fetchSync(req).0 == 200
+}
+
+struct InboxNote {
+    let kind: String     // req or ok
+    let user: String
+    let pub: Data
+    let id: String
+    let re: String
+    let t: Int
+}
+
+// Everything still in my inbox: the relay's twelve hours of it. Refused, and
+// quietly, is anything that does not open, does not parse, is not one of the
+// two kinds, or claims a time the relay could not have kept it until.
+func inboxRead(_ relay: URL, me: String) -> [InboxNote]? {
+    let (topic, key) = inboxFor(me)
+    var c = URLComponents(url: relay.appendingPathComponent(topic).appendingPathComponent("json"),
+                          resolvingAgainstBaseURL: false)!
+    c.queryItems = [URLQueryItem(name: "poll", value: "1"),
+                    URLQueryItem(name: "since", value: String(now() - backlog))]
+    var req = URLRequest(url: c.url!)
+    req.timeoutInterval = 15
+    let (code, data) = fetchSync(req)
+    guard code == 200, let data = data, data.count < 4 << 20 else { return nil }
+    var out: [InboxNote] = []
+    for line in data.split(separator: 0x0A) {
+        guard let o = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+              (o["event"] as? String) == "message", let m = o["message"] as? String,
+              m.hasPrefix(inboxPrefix), m.utf8.count <= maxWire,
+              let raw = Data(base64Encoded: String(m.dropFirst(inboxPrefix.count))),
+              let box = try? ChaChaPoly.SealedBox(combined: raw),
+              let plain = try? ChaChaPoly.open(box, using: key, authenticating: Data(topic.utf8)),
+              let e = (try? JSONSerialization.jsonObject(with: plain)) as? [String: Any],
+              (e["v"] as? Int) == 3,
+              let k = e["k"] as? String, k == "req" || k == "ok",
+              let u = (e["u"] as? String).flatMap(normUser), u != me,
+              let p = (e["p"] as? String).flatMap({ Data(base64Encoded: $0) }), p.count == 32,
+              let i = e["i"] as? String, isID(i),
+              let t = e["t"] as? Int else { continue }
+        let age = Date().timeIntervalSince1970 - Double(t)
+        guard age <= maxAge, -age <= maxAhead else { continue }
+        let re = (e["re"] as? String).flatMap { isID($0) ? $0 : nil } ?? ""
+        out.append(InboxNote(kind: k, user: u, pub: p, id: i, re: re, t: t))
+    }
+    return out.sorted { $0.t < $1.t }
+}
+
+// --- the address book ----------------------------------------------------------
+// friends.tsv and chat-requests.tsv, and the only code that changes either.
+// The app changes them through the commands at the bottom of this file, and
+// a break's chat through the overlay, possibly in the same second — so every
+// change is a read, a change and a write under one lock, never a write of a
+// copy that was read a while ago.
+
+struct Request {
+    let dir: String      // in: they asked; out: you asked
+    let user: String
+    let pub: Data        // theirs, for an incoming one; empty for yours
+    let id: String
+    let t: Int
+}
+
+func withBook<T>(_ dir: String, _ body: () -> T) -> T {
+    let fd = open(dir + "/.chat-book.lock", O_CREAT | O_RDWR, 0o600)
+    if fd >= 0 { flock(fd, LOCK_EX) }
+    defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
+    return body()
+}
+
+func loadRequests(_ dir: String) -> [Request] {
+    guard let raw = try? String(contentsOfFile: dir + "/chat-requests.tsv", encoding: .utf8)
+    else { return [] }
+    var out: [Request] = []
+    for line in raw.split(separator: "\n") {
+        let f = line.components(separatedBy: "\t")
+        guard f.count == 5, f[0] == "in" || f[0] == "out", let u = normUser(f[1]),
+              isID(f[3]), let t = Int(f[4]) else { continue }
+        let pub = Data(base64Encoded: f[2]) ?? Data()
+        guard f[0] == "out" || pub.count == 32 else { continue }
+        out.append(Request(dir: f[0], user: u, pub: pub, id: f[3], t: t))
+    }
+    return Array(out.suffix(maxRequests))
+}
+
+func saveRequests(_ dir: String, _ reqs: [Request]) {
+    var s = "dir\tuser\tkey\tid\ttime\n"
+    for r in reqs.suffix(maxRequests) {
+        s += "\(r.dir)\t\(r.user)\t\(r.pub.base64EncodedString())\t\(r.id)\t\(r.t)\n"
+    }
+    writePrivate(dir + "/chat-requests.tsv", Data(s.utf8))
+}
+
+func newFriendID(_ friends: [Friend]) -> String {
+    while true {
+        let id = String(format: "%08x", UInt32.random(in: .min ... .max))
+        if !friends.contains(where: { $0.id == id }) { return id }
+    }
+}
+
+// Adds a friend from a key agreement, unless the secret is already a friend.
+// Returns the friend either way, or nil if there is no room.
+@discardableResult
+func befriend(_ dir: String, user: String, secret: Data) -> Friend? {
+    var friends = loadFriends(dir)
+    if let f = friends.first(where: { $0.secret == secret }) { return f }
+    guard friends.count < maxFriends else { return nil }
+    let f = Friend(id: newFriendID(friends), name: user, code: codeFor(secret),
+                   secret: secret, added: now(), user: user)
+    friends.append(f)
+    saveFriends(dir, friends)
+    return f
+}
+
+enum BookResult {
+    case ok(String)
+    case no(String)
+}
+
+func bookSetName(_ dir: String, _ raw: String) -> BookResult {
+    guard let u = normUser(raw) else {
+        return .no("Use 2 to 24 letters, digits, dots, dashes or underscores")
+    }
+    writePrivate(dir + "/chat-name", Data((u + "\n").utf8))
+    return .ok("Your username is \(u)")
+}
+
+// Asking somebody. If they have already asked you, this is accepting them
+// instead — the two requests have crossed, and either is consent.
+func bookAdd(_ dir: String, _ raw: String) -> BookResult {
+    guard let me = readName(dir) else { return .no("Choose your username first") }
+    guard let u = normUser(raw) else { return .no("That is not a username") }
+    guard u != me else { return .no("That is your own username") }
+    guard let relay = relayFor(dir), let key = myKey(dir) else {
+        return .no("Messages cannot reach the relay")
+    }
+    if loadFriends(dir).contains(where: { $0.user == u }) {
+        return .no("You are already friends with \(u)")
+    }
+    if let mine = loadRequests(dir).last(where: { $0.dir == "in" && $0.user == u }) {
+        return bookAccept(dir, mine.id)
+    }
+    guard inboxSend(relay, to: u, ["k": "req", "u": me,
+                                   "p": key.publicKey.rawRepresentation.base64EncodedString()])
+    else { return .no("Could not reach the relay. Try again") }
+    withBook(dir) {
+        var reqs = loadRequests(dir).filter { !($0.dir == "out" && $0.user == u) }
+        reqs.append(Request(dir: "out", user: u, pub: Data(), id: randomID(), t: now()))
+        saveRequests(dir, reqs)
+    }
+    return .ok("Request sent to \(u)")
+}
+
+func bookAccept(_ dir: String, _ id: String) -> BookResult {
+    guard let me = readName(dir) else { return .no("Choose your username first") }
+    guard let relay = relayFor(dir), let key = myKey(dir) else {
+        return .no("Messages cannot reach the relay")
+    }
+    guard let r = loadRequests(dir).first(where: { $0.dir == "in" && $0.id == id }) else {
+        return .no("That request is gone")
+    }
+    guard let secret = pairSecret(key, r.pub) else { return .no("That request is broken") }
+    // Answered before anything is written: an answer that never left would
+    // be a friend on this side only, waiting for ever.
+    guard inboxSend(relay, to: r.user, ["k": "ok", "u": me, "re": r.id,
+                                        "p": key.publicKey.rawRepresentation.base64EncodedString()])
+    else { return .no("Could not reach the relay. Try again") }
+    let f: Friend? = withBook(dir) {
+        let f = befriend(dir, user: r.user, secret: secret)
+        saveRequests(dir, loadRequests(dir).filter { !($0.user == r.user) })
+        return f
+    }
+    guard let friend = f else { return .no("That is \(maxFriends) friends, the most there is room for") }
+    return .ok("You and \(friend.name) are friends")
+}
+
+func bookIgnore(_ dir: String, _ id: String) -> BookResult {
+    withBook(dir) { saveRequests(dir, loadRequests(dir).filter { !($0.dir == "in" && $0.id == id) }) }
+    return .ok("Ignored")
+}
+
+func bookRename(_ dir: String, _ id: String, _ raw: String) -> BookResult {
+    let n = String(clean(raw).prefix(maxName))
+    guard !n.isEmpty else { return .no("Give them a name") }
+    let found: Bool = withBook(dir) {
+        var friends = loadFriends(dir)
+        guard let k = friends.firstIndex(where: { $0.id == id }) else { return false }
+        friends[k].name = n
+        saveFriends(dir, friends)
+        return true
+    }
+    return found ? .ok("Renamed to \(n)") : .no("That friend is gone")
+}
+
+// Unfriending is deleting the row. The secret stops working here at once; on
+// their side it keeps its row until they remove it too, and until then they
+// simply never hear from you. What was said is dropped from chat-log.tsv by
+// the next break, which reads only the lines of friends it still has.
+func bookForget(_ dir: String, _ id: String) -> BookResult {
+    let gone: Friend? = withBook(dir) {
+        var friends = loadFriends(dir)
+        guard let k = friends.firstIndex(where: { $0.id == id }) else { return nil }
+        let f = friends.remove(at: k)
+        saveFriends(dir, friends)
+        return f
+    }
+    return gone.map { .ok("Removed \($0.name)") } ?? .no("That friend is gone")
+}
+
+// The inbox, read and acted on. A request is kept until it is accepted or
+// ignored, unless you had asked them too, in which case it is accepted now.
+// An answer completes a request of yours and nothing else: an answer to a
+// question you never asked is somebody trying to become your friend without
+// asking, and is dropped. A request from somebody who is already your friend
+// by that same key is answered again — their first answer went unread for
+// twelve hours, and they asked again.
+func bookInbox(_ dir: String) -> BookResult {
+    guard let me = readName(dir) else { return .ok("") }
+    guard let relay = relayFor(dir), let key = myKey(dir) else {
+        return .no("Messages cannot reach the relay")
+    }
+    guard let notes = inboxRead(relay, me: me) else { return .no("Could not reach the relay") }
+    var answer: [(String, String)] = []
+    var added: [String] = []
+    withBook(dir) {
+        var reqs = loadRequests(dir)
+        for n in notes {
+            guard let secret = pairSecret(key, n.pub) else { continue }
+            let known = loadFriends(dir).contains { $0.secret == secret }
+            let asked = reqs.contains { $0.dir == "out" && $0.user == n.user }
+            if n.kind == "ok" {
+                guard asked, !known else { continue }
+            } else if known {
+                answer.append((n.user, n.id))
+                continue
+            } else if !asked {
+                if !reqs.contains(where: { $0.dir == "in" && $0.user == n.user && $0.pub == n.pub }) {
+                    reqs.append(Request(dir: "in", user: n.user, pub: n.pub, id: n.id, t: n.t))
+                }
+                continue
+            } else {
+                answer.append((n.user, n.id))
+            }
+            if befriend(dir, user: n.user, secret: secret) != nil {
+                added.append(n.user)
+                reqs.removeAll { $0.user == n.user }
+            }
+        }
+        saveRequests(dir, reqs)
+    }
+    let pub = key.publicKey.rawRepresentation.base64EncodedString()
+    for (user, re) in answer {
+        _ = inboxSend(relay, to: user, ["k": "ok", "u": me, "re": re, "p": pub])
+    }
+    return .ok(added.isEmpty ? "" : "You and \(added.joined(separator: ", ")) are friends")
+}
+
 // --- break mode --------------------------------------------------------------
 // Everything a break's chat is, for as long as the break lasts: one Chat per
 // friend, the commands the overlay sends, the history, and the state file the
 // overlay draws from.
 //
-// The overlay never holds a code it did not have typed into it. It names
-// friends by an id that is not a secret; this program resolves the id, and it
-// is this program — not the overlay — that puts a new code on the clipboard.
-// A page that somehow began saying things it shouldn't could therefore ask for
-// a code to be copied, and could never read one.
-
-// Clipboard managers that honour the nspasteboard.org conventions do not
-// record an item marked concealed, and a friendship's code sitting in a
-// clipboard history for months is one more place for it to leak from.
-//
-// TTCHAT_CLIPBOARD=off is for chat.test.py. The clipboard is one of the
-// things on this machine that is shared with whoever is using it, like
-// Spotify: a test run that pairs a dozen fake friends must not leave the last
-// of their codes where your next Cmd-V was going to find a sentence.
-func copyToClipboard(_ s: String) {
-    if ProcessInfo.processInfo.environment["TTCHAT_CLIPBOARD"] == "off" { return }
-    let pb = NSPasteboard.general
-    let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
-    pb.clearContents()
-    pb.declareTypes([.string, concealed], owner: nil)
-    pb.setString(s, forType: .string)
-    pb.setString("", forType: concealed)
-}
+// The overlay never holds a code. It names friends by an id that is not a
+// secret, and requests by theirs; this program resolves both. A page that
+// somehow began saying things it shouldn't could ask for a friend to be
+// added or removed, as the person in front of it can, and could never read
+// the secret a friendship is.
 
 struct Entry {
     let q: Int          // this Mac's own order, and the read marker's unit
@@ -616,6 +1033,10 @@ final class Room {
     var syncDirty = false
     var leaving = false
     var timers: [DispatchSourceTimer] = []
+    // friends.tsv as last read: the app can add, rename or remove a friend in
+    // the middle of a break, and this notices within a second.
+    var stamp: Date?
+    var inboxBusy = false
 
     init(dir: String, watcher: String) {
         self.dir = dir
@@ -629,12 +1050,21 @@ final class Room {
         relay = relayFor(dir)
         if relay == nil { relayProblem = "chat-relay names a relay that is not https://" }
         friends = loadFriends(dir)
+        stamp = mtime(path("friends.tsv"))
         loadLog()
         loadSync()
         for f in friends { connect(f) }
         changed()
         every(0.25) { [weak self] in self?.poll() }
         every(1) { [weak self] in self?.watch() }
+        // Requests wait in the inbox, not in a stream: a break looks once as
+        // it begins, and then twice a minute.
+        every(30) { [weak self] in self?.checkInbox() }
+        checkInbox()
+    }
+
+    func mtime(_ p: String) -> Date? {
+        return (try? FileManager.default.attributesOfItem(atPath: p))?[.modificationDate] as? Date
     }
 
     func every(_ secs: Double, _ f: @escaping () -> Void) {
@@ -654,6 +1084,47 @@ final class Room {
             .split(separator: "\n").first?.components(separatedBy: "\t") ?? []
         if f.count < 7 || f[0] != "BREAK" || f[6] != watcher
             || Date().timeIntervalSince(started) > 3 * 3600 { leave() }
+        refresh()
+    }
+
+    // friends.tsv changed under us — the app, or one of the commands below.
+    // New friends are connected, gone ones disconnected and their lines
+    // dropped, and a renamed one renamed.
+    func refresh() {
+        let now = mtime(path("friends.tsv"))
+        guard now != stamp else { return }
+        stamp = now
+        let fresh = loadFriends(dir)
+        let ids = Set(fresh.map { $0.id })
+        for f in friends where !ids.contains(f.id) {
+            chats.removeValue(forKey: f.id)?.stop()
+            down[f.id] = nil
+            sync[f.id] = nil
+            log.removeAll { $0.f == f.id }
+            logDirty = true
+            syncDirty = true
+        }
+        let had = Set(friends.map { $0.id })
+        friends = fresh
+        for f in fresh where !had.contains(f.id) { connect(f) }
+        changed()
+    }
+
+    // The inbox, on a thread of its own: it waits on the network, and this
+    // one draws the break screen.
+    func checkInbox() {
+        guard !inboxBusy, readName(dir) != nil else { return }
+        inboxBusy = true
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
+            let r = bookInbox(self.dir)
+            DispatchQueue.main.async {
+                self.inboxBusy = false
+                if case .ok(let m) = r, !m.isEmpty { self.tell("added", x: m) }
+                self.refresh()
+                self.changed()
+            }
+        }
     }
 
     // Nothing to say goodbye with: where you are next is the watcher's to post.
@@ -720,12 +1191,6 @@ final class Room {
             s += "\(f.id)\t\(y.since)\t\(y.read)\t\(y.ph)\t\(y.from)\t\(y.until)\t\(y.stamp)\n"
         }
         writePrivate(path("chat-sync.tsv"), Data(s.utf8))
-    }
-
-    func saveFriends() {
-        var s = "id\tname\tcode\tadded\n"
-        for f in friends { s += "\(f.id)\t\(f.name)\t\(f.code)\t\(f.added)\n" }
-        writePrivate(path("friends.tsv"), Data(s.utf8))
     }
 
     // --- the relay ---
@@ -829,15 +1294,19 @@ final class Room {
             }
         }
         shown.sort { ($0["q"] as! Int) < ($1["q"] as! Int) }
+        let reqs = loadRequests(dir)
         let state: [String: Any] = [
-            "v": 2, "run": run,
+            "v": 3, "run": run,
+            "me": readName(dir) ?? "",
             "relay": ["ok": problem == nil, "x": problem ?? ""] as [String: Any],
             "friends": friends.map { f -> [String: Any] in
                 let y = sync[f.id] ?? Sync()
                 let unread = log.filter { !$0.out && $0.f == f.id && $0.q > y.read }.count
-                return ["id": f.id, "n": f.name, "ph": y.ph, "since": y.from,
+                return ["id": f.id, "n": f.name, "u": f.user, "ph": y.ph, "since": y.from,
                         "until": y.until, "st": y.stamp, "read": y.read, "unread": unread]
             },
+            "requests": reqs.filter { $0.dir == "in" }.map { ["id": $0.id, "u": $0.user] },
+            "pending": reqs.filter { $0.dir == "out" }.map { ["id": $0.id, "u": $0.user] },
             "log": shown,
             "note": note ?? NSNull()
         ]
@@ -857,13 +1326,34 @@ final class Room {
         switch (f[0], f.count) {
         case ("send", 3) where isHex(f[1], 8):   sendText(f[1], f[2])
         case ("read", 3) where isHex(f[1], 8):   markRead(f[1], f[2])
-        case ("invite", 2):                      invite(f[1])
-        case ("join", 3):                        join(f[1], f[2])
-        case ("copy", 2) where isHex(f[1], 8):   copy(f[1])
-        case ("forget", 2) where isHex(f[1], 8): forget(f[1])
+        case ("setname", 2):                     book { bookSetName(self.dir, f[1]) }
+        case ("add", 2):                         book { bookAdd(self.dir, f[1]) }
+        case ("accept", 2) where isID(f[1]):     book { bookAccept(self.dir, f[1]) }
+        case ("ignore", 2) where isID(f[1]):     book { bookIgnore(self.dir, f[1]) }
+        case ("rename", 3) where isHex(f[1], 8): book { bookRename(self.dir, f[1], f[2]) }
+        case ("forget", 2) where isHex(f[1], 8): book { bookForget(self.dir, f[1]) }
         default: return
         }
         changed()
+    }
+
+    // An address-book change, the same functions the app's commands call, on
+    // a thread of their own because some of them wait on the relay. What they
+    // say comes back as a note for the overlay; what they changed comes back
+    // through friends.tsv, which refresh() reads.
+    func book(_ job: @escaping () -> BookResult) {
+        DispatchQueue.global().async { [weak self] in
+            let r = job()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch r {
+                case .ok(let m): self.tell("done", x: m)
+                case .no(let m): self.tell("bad", x: m)
+                }
+                self.refresh()
+                self.changed()
+            }
+        }
     }
 
     // To anyone, at any time. A friend who is working reads it at their next
@@ -896,79 +1386,6 @@ final class Room {
         sync[id] = y
         syncDirty = true
     }
-
-    func name(_ raw: String) -> String? {
-        let n = String(clean(raw).prefix(maxName))
-        return n.isEmpty ? nil : n
-    }
-
-    func newID() -> String {
-        while true {
-            let id = String(format: "%08x", UInt32.random(in: .min ... .max))
-            if !friends.contains(where: { $0.id == id }) { return id }
-        }
-    }
-
-    func add(_ name: String, code: String, secret: Data) -> Friend {
-        let f = Friend(id: newID(), name: name, code: code, secret: secret, added: now())
-        friends.append(f)
-        saveFriends()
-        syncDirty = true
-        connect(f)
-        return f
-    }
-
-    // Making a code makes the friendship: the other side joins it when they
-    // paste. The code goes straight onto the clipboard, for the one message
-    // it is meant for, and nowhere else. Anything written to them before they
-    // paste it waits on the relay like any other message.
-    func invite(_ raw: String) {
-        guard let n = name(raw) else { return tell("bad", x: "Give them a name first") }
-        guard friends.count < maxFriends else {
-            return tell("bad", x: "That is \(maxFriends) friends, which is the most there is room for")
-        }
-        let code = newCode()
-        let f = add(n, code: code, secret: parseCode(code)!)
-        copyToClipboard(code)
-        tell("invited", id: f.id)
-    }
-
-    func join(_ raw: String, _ pasted: String) {
-        guard let n = name(raw) else { return tell("bad", x: "Give them a name first") }
-        let code = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let secret = parseCode(code) else {
-            return tell("bad", x: "That is not a whole code. Ask them to send it again")
-        }
-        if let old = friends.first(where: { $0.secret == secret }) {
-            return tell("bad", x: "That code is already \(old.name)")
-        }
-        guard friends.count < maxFriends else {
-            return tell("bad", x: "That is \(maxFriends) friends, which is the most there is room for")
-        }
-        tell("joined", id: add(n, code: code, secret: secret).id)
-    }
-
-    func copy(_ id: String) {
-        guard let f = friends.first(where: { $0.id == id }) else { return }
-        copyToClipboard(f.code)
-        tell("copied", id: id)
-    }
-
-    // Unfriending is deleting the row, and everything said with them. The
-    // code stops working here at once; on their side it keeps its row until
-    // they remove it too, and until then they simply never hear from you.
-    func forget(_ id: String) {
-        guard let f = friends.first(where: { $0.id == id }) else { return }
-        chats.removeValue(forKey: id)?.stop()
-        down[id] = nil
-        friends.removeAll { $0.id == id }
-        log.removeAll { $0.f == id }
-        sync[id] = nil
-        saveFriends()
-        logDirty = true
-        syncDirty = true
-        tell("forgot", x: f.name)
-    }
 }
 
 setvbuf(stdout, nil, _IOLBF, 0)
@@ -976,8 +1393,33 @@ let args = CommandLine.arguments
 
 func usage() -> Never {
     fputs("usage: ttchat break <dir> | status <dir> <work|break|off> <since> <until>\n"
-        + "       | code | peer <relay> <code> | seal <code> <json>\n", stderr)
+        + "       | list|inbox <dir> | setname|add|accept|ignore|forget <dir> <arg>\n"
+        + "       | rename <dir> <id> <name> | code | peer <relay> <code> | seal <code> <json>\n",
+          stderr)
     exit(2)
+}
+
+// The answer to one of the app's commands: one line, and the exit status.
+func answer(_ r: BookResult) -> Never {
+    switch r {
+    case .ok(let m): print(m); exit(0)
+    case .no(let m): print(m); exit(1)
+    }
+}
+
+// Where each friend is, from chat-sync.tsv, for `list`.
+func readSync(_ dir: String) -> [String: Sync] {
+    var out: [String: Sync] = [:]
+    guard let raw = try? String(contentsOfFile: dir + "/chat-sync.tsv", encoding: .utf8)
+    else { return out }
+    for line in raw.split(separator: "\n") {
+        let f = line.components(separatedBy: "\t")
+        guard f.count == 7, isHex(f[0], 8), let since = Int(f[1]), let read = Int(f[2]),
+              f[3].isEmpty || phases.contains(f[3]),
+              let a = Int(f[4]), let b = Int(f[5]), let st = Int(f[6]) else { continue }
+        out[f[0]] = Sync(since: since, read: read, ph: f[3], from: a, until: b, stamp: st)
+    }
+    return out
 }
 
 func need<T>(_ v: T?, _ why: String) -> T {
@@ -1014,10 +1456,14 @@ case "break":
     onSignal { room.leave() }
     dispatchMain()
 case "status":
-    // One post per friend, and gone. No friends, no network.
+    // One post per friend, and gone. No friends, no network — except a look
+    // in the inbox, if you have a username: that is how a friend who accepted
+    // you while you worked is your friend by the next break, without the app
+    // having been opened in between.
     guard args.count == 6, args[2].hasPrefix("/"), phases.contains(args[3]),
           let a = Int(args[4]), let b = Int(args[5]) else { usage() }
     let dir = args[2]
+    if readName(dir) != nil { _ = bookInbox(dir) }
     let fr = loadFriends(dir)
     guard !fr.isEmpty, let relay = relayFor(dir) else { exit(0) }
     let me = selfID(dir)
@@ -1034,6 +1480,42 @@ case "status":
     // A relay that does not answer does not get to keep a process alive.
     DispatchQueue.main.asyncAfter(deadline: .now() + 15) { exit(0) }
     dispatchMain()
+case "list":
+    // Files only: this is what the app draws its Friends page from, every few
+    // seconds, and none of that may reach the relay.
+    guard args.count == 3, args[2].hasPrefix("/") else { usage() }
+    let dir = args[2]
+    let sync = readSync(dir)
+    let reqs = loadRequests(dir)
+    let out: [String: Any] = [
+        "me": readName(dir) ?? "",
+        "friends": loadFriends(dir).map { f -> [String: Any] in
+            let y = sync[f.id] ?? Sync()
+            return ["id": f.id, "n": f.name, "u": f.user, "ph": y.ph, "since": y.from,
+                    "until": y.until, "st": y.stamp, "check": checkFor(f.secret)]
+        },
+        "requests": reqs.filter { $0.dir == "in" }.map { ["id": $0.id, "u": $0.user, "t": $0.t] },
+        "pending": reqs.filter { $0.dir == "out" }.map { ["id": $0.id, "u": $0.user, "t": $0.t] },
+    ]
+    // Sorted, so the same book prints the same bytes: the app redraws when
+    // they change, and a dictionary's order is different every run.
+    let data = try! JSONSerialization.data(withJSONObject: out, options: [.sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
+case "setname", "add", "accept", "ignore", "forget", "inbox":
+    let one = args[1] == "inbox"
+    guard args.count == (one ? 3 : 4), args[2].hasPrefix("/") else { usage() }
+    let dir = args[2]
+    switch args[1] {
+    case "setname": answer(bookSetName(dir, args[3]))
+    case "add":     answer(bookAdd(dir, args[3]))
+    case "accept":  answer(isID(args[3]) ? bookAccept(dir, args[3]) : .no("That request is gone"))
+    case "ignore":  answer(isID(args[3]) ? bookIgnore(dir, args[3]) : .no("That request is gone"))
+    case "forget":  answer(isHex(args[3], 8) ? bookForget(dir, args[3]) : .no("That friend is gone"))
+    default:        answer(bookInbox(dir))
+    }
+case "rename":
+    guard args.count == 5, args[2].hasPrefix("/") else { usage() }
+    answer(isHex(args[3], 8) ? bookRename(args[2], args[3], args[4]) : .no("That friend is gone"))
 case "code":
     print(newCode())
 case "seal":

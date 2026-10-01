@@ -61,8 +61,8 @@ adds on this machine: it is the one socket anything here listens on. (Messages,
 | Mutations are POST-only and need the token in an `X-TimeTracker-Token` header, `Content-Type: application/json`, and a matching `Origin` | CSRF: a cross-origin page can send none of those without a preflight, and `OPTIONS` is never answered |
 | The server never writes; mutations shell out to `action.sh` with an argv list | Bypassing the lock; shell interpretation of logged text |
 | CSP `default-src 'none'` with inline style and script, `connect-src 'self'` and `img-src data:`; `nosniff`, `no-referrer` | Token leaking via Referer; the page loading remote resources |
-| Token file mode 600 | Other local accounts reading the token |
-| Idle shutdown after ten minutes | An unattended server lingering |
+| Token file mode 600; in the app, the token is never written to disk at all | Other local accounts reading the token |
+| In the app, exits with the app that started it; in the browser, after ten idle minutes | An unattended server lingering |
 
 `img-src data:` is there for one image, the dropdown arrow, which the CSS
 draws as an inline SVG. Without it `default-src 'none'` blocked the arrow
@@ -78,20 +78,29 @@ Residual risks:
 - `/usr/bin/open` is called with the URL as an argv list, never a shell
   string, so a URL with shell metacharacters is inert.
 
-The page can edit and delete logged sessions, change settings, retire
-categories, add categories and playlists, and open the three permission
-helpers. Every one of those:
+The page is the whole program for whoever uses the app, so it can do what the
+launcher does: start, stop and switch, edit and delete logged sessions, change
+settings, add, rename and retire categories, manage playlists and friends,
+open the three permission helpers, and start an update. Every one of those:
 
-- calls `action.sh` with fixed arguments, or opens a bundle whose name is
-  built from a fixed list. `action.sh` re-validates every bound (epoch sanity,
-  24h ceiling, known category, no overlap with the running segment), holds
-  the same lock as every other write, and sanitizes text fields. The
-  dashboard has no path to the log that `action.sh` does not gate.
-- cannot start, stop or pause a timer. The two category routes refuse to touch
-  the category that is running.
+- calls `action.sh`, `start.sh --answer`, `update.sh` or the chat helper with
+  an argv list, or opens a bundle whose name is built from a fixed list.
+  `action.sh` re-validates every bound (epoch sanity, 24h ceiling, known
+  category, no overlap with the running segment), holds the same lock as
+  every other write, and sanitizes text fields. The page has no path to the
+  log that `action.sh` does not gate.
+- can start and stop a timer, which the browser dashboard before it could
+  not. That was a choice about a page you had to go looking for; the app's
+  window is the program, and the checks above are what keep anyone but the
+  page from using the same routes. Starting goes through `start.sh`, so a
+  pomodoro armed from the window is the one the launcher arms. The category
+  routes refuse to retire the category that is running.
 - rebuilds the launcher bundles after a category change by running
-  `sync-apps.sh` with an empty argv, and only after `action.sh` accepted the
-  change. A failure there is a message on the page, not a failed write.
+  `sync-apps.sh` with an empty argv, once, a moment after the last change,
+  and only for changes `action.sh` accepted.
+- reaches the network only through the chat helper (friend requests, and
+  looking in your inbox) and only with Messages on, or through `update.sh`
+  (section 3g) when you press Check for updates. Everything else is files.
 - addresses a session by `(start_iso, duration_sec, category)`, and refuses
   anything that does not match exactly one row.
 - moves deleted rows to `sessions.deleted.tsv` and deleted categories to
@@ -216,10 +225,11 @@ to reach and no firewall prompt.
 
 | The relay sees | The relay never sees |
 |---|---|
-| Your IP address, and your friends' | Names, yours or theirs |
+| Your IP address, and your friends' | The names you give your friends |
 | When you start and end work and breaks, to the second | What you write, or which phase a post is |
 | That two addresses share a topic, i.e. who your friends are | Anything from the log |
-| Message sizes, and twelve hours of them at rest | The codes |
+| Message sizes, and twelve hours of them at rest | A friendship's secret |
+| A friend request: the username it is for, if it guesses it, and the asker's username and public key | |
 
 Your friends see the phase, when it began and when it is planned to end.
 Not the category, the plan, or anything else from the log.
@@ -239,19 +249,37 @@ Controls:
 | `https://` only, plain `http://` only to loopback | The topic crossing a network in the clear |
 | Ephemeral URLSession: no cache, no cookies | Anything about a conversation reaching disk except where this section says |
 
-What is kept on this Mac. `friends.tsv` (the codes), `chat-log.tsv` (the last
-two hundred lines per friend, and never fewer than twelve hours' worth: those
-ids are the replay check), `chat-sync.tsv` (read markers, where each friend
-was last heard to be, how far into the relay's history this Mac has read) and
-`chat-self`. All mode 600, all written only by the chat helper, and read by
-nothing else in TimeTracker. Removing a friend deletes their lines too.
+Making friends. Each Mac has a username (`chat-name`) and a Curve25519 key
+(`chat-key`, made once with `O_EXCL`). Adding somebody leaves a request at
+the topic their username names: your username and your public key, sealed
+with a key derived from their username. They accept; their Mac derives the
+friendship's secret from its private key and your public one, and leaves its
+public key in your inbox; yours derives the same secret. That secret is what a
+friendship has always been, and everything above applies to it unchanged.
+Friends made with a pasted code before this keep working.
+
+| Control | Blocks |
+|---|---|
+| X25519, then HKDF-SHA256 over both public keys | The relay, which carries both public keys, deriving the secret |
+| A shared value of all zeros is refused | A small-subgroup public key making every request share one secret |
+| A request is something you accept; an answer is acted on only if this Mac asked that username | A stranger becoming your friend without asking, or by answering a question you never asked |
+| Requests are kept per username and key, at most forty | One request sent a hundred times becoming a hundred rows |
+| `friends.tsv` and `chat-requests.tsv` change only under `.chat-book.lock` | The app and a break's chat, changing friends in the same second, losing one change |
+
+What is kept on this Mac. `friends.tsv` (the secrets), `chat-requests.tsv`,
+`chat-key`, `chat-name`, `chat-log.tsv` (the last two hundred lines per
+friend, and never fewer than twelve hours' worth: those ids are the replay
+check), `chat-sync.tsv` (read markers, where each friend was last heard to
+be, how far into the relay's history this Mac has read) and `chat-self`. All
+mode 600, all written only by the chat helper. The app's server reads
+`chat-requests.tsv` to count the requests waiting, and nothing else in
+TimeTracker reads any of them. Removing a friend deletes their lines too.
 `uninstall.sh` keeps them with the log unless given `--purge-data`.
 
-Where the codes are. The overlay names friends by an eight-digit id that is
-not a secret. When you make a code, the helper puts it straight onto the
-clipboard, marked concealed so clipboard managers that honour nspasteboard.org
-skip it; the page never holds it. The only code the page ever holds is one you
-paste into it, on its way to the helper.
+Where the secrets are. Nowhere but `friends.tsv`. The overlay and the app name
+friends by an eight-digit id and requests by a sixteen-digit one, neither a
+secret, and nothing either can ask makes the helper print a secret. Nothing
+is ever put on the clipboard.
 
 Where friend text goes. Into the helper's state file, which the overlay reads,
 rebuilds field by field, and hands to the page, which sets it with
@@ -264,12 +292,22 @@ where under the source's `'unsafe-inline'` it did, and sent a message.
 
 Residual risks:
 
+- A request says who it is from and cannot prove it. Somebody who knows both
+  usernames (the relay's operator could learn them) can send a request in
+  your friend's name, or answer your request before your friend does. The
+  Diffie-Hellman exchange makes that impersonation, not eavesdropping: you
+  would be friends with them instead, and they cannot read what you and your
+  real friend say. Each friend in the app shows four symbols derived from the
+  secret; the same four on both Macs means nobody is in between. A
+  password-authenticated exchange (PAKE) would close this, and costs a code to
+  type, which is what this design exists to remove.
+- Anybody who knows your username can read what is waiting in your inbox:
+  who has asked you, and their public keys. Usernames are not secrets.
 - No forward secrecy, and now a store to aim at. Both friends hold the same
   key for as long as the friendship lasts, and the relay holds twelve hours
   of what it sealed. Whoever records the relay's traffic (its operator can)
-  and later obtains a code can read everything that code ever sealed. Send a
-  code only to the friend it is for, keep it nowhere but `friends.tsv`, and if
-  one leaks, remove the friend on both sides and make a new code.
+  and later obtains `friends.tsv` can read everything those secrets ever
+  sealed. If it leaks, remove the friends on both sides and add them again.
 - The relay learns your whole pomodoro schedule and your friends' addresses,
   and your friends learn the schedule. That is the price of the feature, and
   the owner chose it. Self-hosting ntfy moves the relay's half to a relay you
@@ -283,7 +321,7 @@ Residual risks:
   campus network can be), the allowance is shared too. Anyone who learns a
   topic can flood it; their posts fail authentication and are dropped, but
   they can crowd out delivery.
-- A friend can put rude text on your break screen. Remove them: the code
+- A friend can put rude text on your break screen. Remove them: the secret
   stops working on your side at once, and their lines are deleted.
 - A clock more than two minutes fast has its messages dropped as stale.
 - The bundle is user-writable code that makes network connections: section 1
@@ -292,6 +330,25 @@ Residual risks:
 Rule to keep: nothing but a sealed blob goes to the relay. No title, no tags,
 no plaintext header. Friend text never reaches a shell, AppleScript, argv, a
 path, or `innerHTML`.
+
+## 3g. Updates. MEDIUM, it runs code it downloaded
+
+`time update`, and Check for updates in the app, run `update.sh`. It lists the
+`vX.Y.Z` tags of github.com/Hamunk/timetracker with `git ls-remote` over
+HTTPS, clones the newest one, refuses it if its `VERSION` does not say the
+same version, and runs that version's `install.sh` as you.
+
+- The trust anchor is the GitHub account and HTTPS, the same as the `git
+  clone` that installed it. There is no separate signature. Whoever can push
+  a tag to that repository can run code on every Mac that updates.
+- It never runs on its own: only when somebody asks, and the launcher verb
+  asks again before installing.
+- A pushed commit reaches nobody until it is tagged.
+- The installer backs the data up first, refuses data written by a newer
+  version, refuses while a pomodoro is live, and keeps the bundle identity,
+  so an update cannot quietly re-key the permission grants.
+- `TIMETRACK_UPDATE_REPO` points it at another repository. It is read from
+  the environment, which section 5 already treats as trusted.
 
 ## 4. Launcher name-squatting. MEDIUM
 

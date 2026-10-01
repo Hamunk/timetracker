@@ -8,7 +8,7 @@
 #   ./dev.sh seed           copy your categories — never your log — into it
 #   ./dev.sh env            the four exports, for `eval "$(./dev.sh env)"`
 #   ./dev.sh relay          the stand-in for ntfy.sh that scratch Messages uses
-#   ./dev.sh friend <code>  a friend on a break, in this terminal, via that relay
+#   ./dev.sh friend [name]  a friend on a break, in this terminal, via that relay
 #   ./dev.sh install-real   install this tree to the real side, if nothing is live
 #
 # Four things have to be separate before two installs can coexist, and three
@@ -122,16 +122,42 @@ cmd_relay() {
 }
 
 # The other end of a friendship, for whoever has no second Mac and no friend
-# to hand: make a code on the scratch break screen, paste it here, and this
-# terminal is that friend — on a break, answering, until you close it. Each
-# line you type is sent, except /work [min], /break [min] and /off, which say
-# where this friend now is; what arrives is printed. It uses the scratch
-# install's own helper and the stand-in relay, never ntfy.sh.
+# to hand. A folder of its own stands in for the friend's Mac, under a
+# username of its own (devfriend unless given one); it asks the scratch
+# install to be friends, accepts the scratch install if it asks first, and
+# once either is answered this terminal is that friend — on a break,
+# answering, until you close it. Each line you type is sent, except /work
+# [min], /break [min] and /off, which say where this friend now is; what
+# arrives is printed. It uses the scratch install's own helper and the
+# stand-in relay, never ntfy.sh, and `./dev.sh relay` has to be running.
 cmd_friend() {
     local bin="$TIMETRACK_APPS_DIR/TimeTracker Chat.app/Contents/MacOS/ttchat"
-    [[ -n "${1:-}" ]] || { printf 'usage: ./dev.sh friend <code>\n'; return 2; }
+    local name="${1:-devfriend}" me d code id
     [[ -x "$bin" ]] || { printf 'No scratch install. ./dev.sh install first.\n'; return 1; }
-    exec "$bin" peer "$DEV_RELAY" "$1"
+    me=$(head -1 "$TIMETRACK_DIR/chat-name" 2>/dev/null)
+    [[ -n "$me" ]] || { printf 'Give the scratch install a username first: Friends, in the app.\n'; return 1; }
+    d="${TMPDIR:-/tmp}/timetrack-dev-friend-$name"
+    mkdir -p "$d" && chmod 700 "$d"
+    printf '%s\n' "$DEV_RELAY" > "$d/chat-relay"
+    "$bin" setname "$d" "$name" >/dev/null || return 1
+    # The friend's own book, read for the scratch user's row: its secret is
+    # what `peer` talks with.
+    friend_code() { awk -F'\t' -v u="$me" 'NR>1 && $5==u { print $3; exit }' "$d/friends.tsv" 2>/dev/null; }
+    if [[ -z "$(friend_code)" ]]; then
+        "$bin" add "$d" "$me"
+        printf 'Accept %s in the scratch app (Friends) or on a break. Waiting...\n' "$name"
+        while [[ -z "$(friend_code)" ]]; do
+            sleep 2
+            "$bin" inbox "$d" >/dev/null
+            id=$("$bin" list "$d" | /usr/bin/python3 -c 'import json,sys
+r=[q["id"] for q in json.load(sys.stdin)["requests"] if q["u"]==sys.argv[1]]
+print(r[0] if r else "")' "$me")
+            [[ -n "$id" ]] && "$bin" accept "$d" "$id" >/dev/null
+        done
+    fi
+    code=$(friend_code)
+    printf '%s and %s are friends. You are %s now.\n' "$name" "$me" "$name"
+    exec "$bin" peer "$DEV_RELAY" "$code"
 }
 
 # The one path from this script to the real install, named for what it does.

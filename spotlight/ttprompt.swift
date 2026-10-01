@@ -54,7 +54,7 @@
 // and one read, .tomato-chat (what the helper says the break's chat looks
 // like). Talking to friends is the chat helper's job and not this one's: this
 // app still launches nothing and still touches no network, and it never reads
-// friends.tsv, where the codes are. Every action leaves here as a file, and
+// friends.tsv, where the secrets are. Every action leaves here as a file, and
 // pomodoro-watch.sh is the only thing that turns a file into a running process.
 // tomato.html is bundled; no network is ever touched.
 //
@@ -126,8 +126,8 @@ app.setActivationPolicy(.accessory)
 // Cmd-V, Cmd-C, Cmd-X, Cmd-A and Cmd-Z do not belong to the text field they
 // seem to act on. AppKit finds them as the key equivalents of Edit menu items
 // and sends the item's action down the responder chain to whatever has focus.
-// An accessory app has no menu bar, and so by default no Edit menu: pasting a
-// friend's code into the break screen did nothing at all, and the plan prompt
+// An accessory app has no menu bar, and so by default no Edit menu: pasting
+// into the break screen did nothing at all, and the start and stop dialogs
 // would not take a paste either. This menu is never drawn. It exists to be
 // searched for those five keys.
 func editMenu() {
@@ -244,15 +244,22 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
     }
 
     // Messages. The page names a friend by the id it was sent — eight hex
-    // digits, not a secret — and the chat helper resolves it. The only text
-    // the page supplies is a message, a friend's name, or a code that was
-    // pasted into it, and each leaves as one TSV line in a file: never an
-    // argument, never script. Nothing here can make the helper reveal a code;
-    // "copy" puts one on the clipboard, which the page cannot read.
+    // digits, not a secret — and a request by its own id, sixteen; the chat
+    // helper resolves both. The only text the page supplies is a message, a
+    // name for a friend, or a username, and each leaves as one TSV line in a
+    // file: never an argument, never script. Nothing it can say makes the
+    // helper hand a friendship's secret to anybody.
     func chatMenu(_ a: String) {
-        func friend(_ s: Substring) -> String? {
+        func hex(_ s: Substring, _ n: Int) -> String? {
             let t = String(s)
-            return t.count == 8 && t.allSatisfy({ "0123456789abcdef".contains($0) }) ? t : nil
+            return t.count == n && t.allSatisfy({ "0123456789abcdef".contains($0) }) ? t : nil
+        }
+        func friend(_ s: Substring) -> String? { return hex(s, 8) }
+        // A username is checked again by the helper; this only keeps the line
+        // one line and the length sane.
+        func user(_ s: Substring) -> String? {
+            let t = String(oneLine(String(s)).prefix(40))
+            return t.isEmpty ? nil : t
         }
         if a.hasPrefix("send.") {
             let r = a.dropFirst(5)
@@ -260,29 +267,25 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
             let text = String(oneLine(String(r[r.index(after: dot)...])).prefix(500))
             guard !text.isEmpty else { return }
             chatQueue("send\t\(f)\t\(text)")
-        } else if a.hasPrefix("invite.") {
-            let n = String(oneLine(String(a.dropFirst(7))).prefix(40))
-            guard !n.isEmpty else { return }
-            chatQueue("invite\t\(n)")
-        } else if a.hasPrefix("join.") {
-            // join.<code>.<name>. A code is base64url, which has no dot in
-            // it, so the first dot ends the code whatever the name contains.
-            let r = a.dropFirst(5)
-            guard let dot = r.firstIndex(of: ".") else { return }
-            let code = String(r[..<dot])
-            let n = String(oneLine(String(r[r.index(after: dot)...])).prefix(40))
-            let b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-            guard code.hasPrefix("tt1-"), code.count <= 80, !n.isEmpty,
-                  code.dropFirst(4).allSatisfy({ b64url.contains($0) }) else { return }
-            chatQueue("join\t\(n)\t\(code)")
         } else if a.hasPrefix("read.") {
             // read.<id>.<q>: everything from them up to q has been on screen.
             let r = a.dropFirst(5)
             guard let dot = r.firstIndex(of: "."), let f = friend(r[..<dot]),
                   let n = Int(r[r.index(after: dot)...]), n >= 0 else { return }
             chatQueue("read\t\(f)\t\(n)")
-        } else if a.hasPrefix("copy."), let f = friend(a.dropFirst(5)) {
-            chatQueue("copy\t\(f)")
+        } else if a.hasPrefix("rename.") {
+            let r = a.dropFirst(7)
+            guard let dot = r.firstIndex(of: "."), let f = friend(r[..<dot]),
+                  let n = user(r[r.index(after: dot)...]) else { return }
+            chatQueue("rename\t\(f)\t\(n)")
+        } else if a.hasPrefix("setname."), let n = user(a.dropFirst(8)) {
+            chatQueue("setname\t\(n)")
+        } else if a.hasPrefix("add."), let n = user(a.dropFirst(4)) {
+            chatQueue("add\t\(n)")
+        } else if a.hasPrefix("accept."), let r = hex(a.dropFirst(7), 16) {
+            chatQueue("accept\t\(r)")
+        } else if a.hasPrefix("ignore."), let r = hex(a.dropFirst(7), 16) {
+            chatQueue("ignore\t\(r)")
         } else if a.hasPrefix("forget."), let f = friend(a.dropFirst(7)) {
             chatQueue("forget\t\(f)")
         }
@@ -336,7 +339,7 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
         func text(_ v: Any?, _ n: Int) -> String {
             return String(oneLine((v as? String) ?? "").prefix(n))
         }
-        var out: [String: Any] = ["run": text(o["run"], 16)]
+        var out: [String: Any] = ["run": text(o["run"], 16), "me": text(o["me"], 24)]
         let r = (o["relay"] as? [String: Any]) ?? [:]
         out["relay"] = ["ok": (r["ok"] as? Bool) ?? false, "x": text(r["x"], 200)] as [String: Any]
         func count(_ v: Any?) -> Int { return max(0, (v as? Int) ?? 0) }
@@ -344,13 +347,24 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
         for f in ((o["friends"] as? [[String: Any]]) ?? []).prefix(20) {
             guard let id = hex8(f["id"]) else { continue }
             let ph = (f["ph"] as? String) ?? ""
-            friends.append(["id": id, "n": text(f["n"], 40),
+            friends.append(["id": id, "n": text(f["n"], 40), "u": text(f["u"], 24),
                             "ph": ["work", "break", "off"].contains(ph) ? ph : "",
                             "since": count(f["since"]), "until": count(f["until"]),
                             "st": count(f["st"]), "read": count(f["read"]),
                             "unread": count(f["unread"])])
         }
         out["friends"] = friends
+        // Requests, by their ids and usernames — the usernames typed on
+        // somebody else's Mac, which is all a request is.
+        func reqs(_ v: Any?) -> [[String: Any]] {
+            return ((v as? [[String: Any]]) ?? []).prefix(40).compactMap { q in
+                guard let id = q["id"] as? String, id.count == 16,
+                      id.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
+                return ["id": id, "u": text(q["u"], 24)]
+            }
+        }
+        out["requests"] = reqs(o["requests"])
+        out["pending"] = reqs(o["pending"])
         var log: [[String: Any]] = []
         // Sixty lines a friend, twenty friends: the most the helper sends.
         for m in ((o["log"] as? [[String: Any]]) ?? []).suffix(1200) {
@@ -361,7 +375,7 @@ final class D: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNaviga
                         "s": ["sending", "sent", "failed"].contains(st) ? st : ""])
         }
         out["log"] = log
-        let kinds = ["invited", "joined", "copied", "forgot", "bad", "error"]
+        let kinds = ["done", "added", "bad", "error"]
         if let n = o["note"] as? [String: Any], let q = n["q"] as? Int,
            let k = n["k"] as? String, kinds.contains(k) {
             var note: [String: Any] = ["q": q, "k": k, "x": text(n["x"], 200),

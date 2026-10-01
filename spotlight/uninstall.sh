@@ -89,12 +89,12 @@ if [[ "${1:-}" == "--purge-data" ]]; then
     rm -rf "$DATA_DIR"
     printf 'Purged data dir %s\n' "$DATA_DIR"
 else
-    printf 'Kept your logs in %s (pass --purge-data to delete them)\n' "$DATA_DIR"
+    printf 'Kept your data and its backups in %s (pass --purge-data to delete them)\n' "$DATA_DIR"
     # Said out loud because these are the kept files that are private in a
-    # way the log is not: each code is a friendship, readable by whoever holds
-    # a copy, and the chat log is what your friends said to you.
+    # way the log is not: each row is a friendship's secret, readable by
+    # whoever holds a copy, and the chat log is what your friends said to you.
     [[ -f "$DATA_DIR/friends.tsv" ]] && \
-        printf 'Kept friends.tsv and chat-log.tsv there too: your friends'"'"' codes, and what you said.\n'
+        printf 'Kept friends.tsv and chat-log.tsv there too: your friendships, and what you said.\n'
 fi
 
 # Two permissions outlive the apps that used them, and macOS keeps them listed

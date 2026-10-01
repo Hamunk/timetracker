@@ -28,6 +28,7 @@
 <title>Pomodoro</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
+[hidden]{display:none!important}
 html,body{width:100%;height:100%;overflow:hidden}
 body{background:radial-gradient(ellipse at 50% 44%,#3a1214 0%,#170909 62%,#0c0505 100%);
 color:#f6efe9;font:17px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;
@@ -374,13 +375,17 @@ transition:background .13s ease,opacity .13s ease}
 .chmore span:hover{color:#f6efe9}
 .chmore .arm{color:#ff9d8a}
 #chaddv{padding:1.4vh 1.6vh .4vh}
-#chform{display:flex;flex-direction:column;gap:1.2vh}
-#chform[hidden]{display:none}
+#chform,#chmeform,#chaskform{display:flex;flex-direction:column;gap:1.2vh}
 .chbtns{display:flex;gap:1vh}
-.chbtns .chbtn{flex:1}
-#chpaste{display:flex;gap:1vh}
-#chpaste[hidden]{display:none}
+.chbtns .chbtn{flex:none}
 .chhelp{font-size:1.4vh;line-height:1.55;color:rgba(246,239,233,.42)}
+/* A request: who, and two answers. Above the friends, because it is the one
+   thing on this panel waiting on you. */
+#chreqs{padding:.8vh .8vh 0}
+.chreq{display:flex;align-items:center;gap:1.3vh;padding:1vh;border-radius:1vh;
+background:rgba(255,255,255,.05);margin-bottom:.6vh}
+.chreq .chft span{color:rgba(246,239,233,.55)}
+.chreq .chbtn{padding:.7vh 1.4vh;font-size:1.45vh}
 #chstat{padding:1.2vh 0;font-size:1.55vh;line-height:1.55;
 color:rgba(246,239,233,.6);min-height:2vh}
 #chstat.ok{color:#68d391}
@@ -601,6 +606,7 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
       <span class="chsub" id="chsub"></span><span class="mesc">esc</span>
     </div>
     <div id="chlistv" class="chv">
+      <div id="chreqs"></div>
       <div id="chfriends"></div>
       <div class="chaddrow" data-ch="add"><span class="plus">+</span>Add a friend</div>
       <div class="chline" id="chlistline"></div>
@@ -611,27 +617,27 @@ drop-shadow(0 0 2.6vh rgba(255,198,88,.8))}
         spellcheck="false" autocomplete="off"><button class="chbtn" id="chsend"
         disabled>Send</button></div>
       <div class="chhint" id="chhint"></div>
-      <div class="chmore"><span id="chcopy">Copy their code</span><span
+      <div class="chmore" id="chmore"><span id="chrename">Rename</span><span
         id="chforget">Remove</span></div>
+      <div class="chin" id="chrenameform" hidden><input id="chnewname" type="text"
+        maxlength="40" spellcheck="false" autocomplete="off"><button class="chbtn"
+        id="chrenamesave">Save</button></div>
       <div class="chline" id="chconvline"></div>
     </div>
     <div id="chaddv" class="chv">
       <div id="chform">
-        <input id="chname" type="text" maxlength="40" placeholder="Their name"
-          spellcheck="false" autocomplete="off">
-        <div class="chbtns">
-          <button class="chbtn" id="chmake">Make a code</button>
-          <button class="chbtn soft" id="chhave">I have a code</button>
+        <div id="chmeform" hidden>
+          <div class="chhelp">Choose a username. Friends add you by it.</div>
+          <div class="chbtns"><input id="chme" type="text" maxlength="24"
+            placeholder="Your username" spellcheck="false" autocomplete="off"><button
+            class="chbtn" id="chmesave">Save</button></div>
         </div>
-        <div id="chpaste" hidden>
-          <input id="chcode" type="text" placeholder="Paste their code"
-            spellcheck="false" autocomplete="off">
-          <button class="chbtn" id="chjoin">Add</button>
+        <div id="chaskform" hidden>
+          <div class="chbtns"><input id="chuser" type="text" maxlength="24"
+            placeholder="Their username" spellcheck="false" autocomplete="off"><button
+            class="chbtn" id="chask">Add</button></div>
+          <div class="chhelp" id="chmine"></div>
         </div>
-        <div class="chhelp">One of you makes a code and sends it to the other,
-          privately. After that you can write to each other at any time, and
-          see where the other is in their pomodoro. A message waits until
-          their next break.</div>
       </div>
       <div id="chstat"></div>
     </div>
@@ -855,16 +861,16 @@ document.addEventListener("keydown",e=>{
       return;
     }
     const ae=document.activeElement;
-    if(ae===$("chtext")||ae===$("chname")||ae===$("chcode")){
-      // Enter sends, as in every chat there is; in the add form it moves on
-      // to the code, and from the code it adds. Only Tab gets through as the
-      // menu key: a letter, or a space, is something you type into a message
-      // or a name.
+    if(CHAT_INPUTS.some(id=>ae===$(id))){
+      // Enter does what the button beside the box does: sends, adds, saves.
+      // Only Tab gets through as the menu key: a letter, or a space, is
+      // something you type into a message or a name.
       if(e.key==="Enter"){
         e.preventDefault();
         if(ae===$("chtext"))chatSend();
-        else if(ae===$("chcode"))chatJoin();
-        else if(!$("chpaste").hidden)$("chcode").focus();
+        else if(ae===$("chuser"))chatAdd();
+        else if(ae===$("chme"))chatSetName();
+        else if(ae===$("chnewname"))chatRename();
         return;
       }
       if(K.menu==="Tab"&&e.key==="Tab"){e.preventDefault();menuClose();}
@@ -978,7 +984,7 @@ function menuClose(instant){
   // swallows every key that is not Enter. Nothing on the break screen would
   // answer the menu key again until something else was clicked. The same
   // goes for the three boxes in Messages.
-  for(const id of ["ntext","chtext","chname","chcode"])$(id).blur();
+  for(const id of ["ntext",...CHAT_INPUTS])$(id).blur();
   M.view="home";
   document.body.classList.remove("menuing");
   const m=$("menu");m.classList.remove("up");
@@ -1172,17 +1178,18 @@ function paintNote(){
 
 /* ---- messages ----
    Your friends, where each of them is in their pomodoro, and what you have
-   said to each other. The chat helper holds the codes, the connections and
+   said to each other. The chat helper holds the secrets, the connections and
    the history; this panel is sent who your friends are, by an id that is not
-   a secret, where they are, and the latest of what was said. It answers with
-   an id and some text. The one secret that can pass through here is a code
-   you paste in yourself, on its way to the helper.
+   a secret, where they are, who has asked to be your friend, and the latest
+   of what was said. It answers with an id and some text. No secret passes
+   through here at all: a friend is added by username.
 
    A message can be written to anyone at any time. It waits on the relay and
    arrives at their next break, the way theirs to you arrive at yours: this
    screen is where a work session's messages are read, never during it. */
 const CH={state:null,ver:0,drawn:"",sub:"list",friend:"",readSent:{},run:"",
   noteQ:-1,pending:[],armed:0,addBusy:0,stick:false,lineT:null};
+const CHAT_INPUTS=["chtext","chuser","chme","chnewname"];
 
 function chatIngest(c){
   if(c&&c.run!==CH.run){
@@ -1254,6 +1261,7 @@ function chatShow(sub,id){
     $(el).classList.toggle("on",k===sub);
   CH.drawn="";CH.armed=0;
   $("chforget").textContent="Remove";$("chforget").className="";
+  $("chmore").hidden=false;$("chrenameform").hidden=true;
   $("chsub").textContent="";$("chsub").className="chsub";
   $("chtitle").textContent=sub==="add"?"Add a friend":"Messages";
   if(sub==="conv"){
@@ -1262,10 +1270,12 @@ function chatShow(sub,id){
   }
   if(sub==="add"){
     addReset();
-    setTimeout(()=>{if(M.on&&M.view==="chat"&&CH.sub==="add")$("chname").focus();},80);
+    setTimeout(()=>{if(M.on&&M.view==="chat"&&CH.sub==="add")
+      $(chatMe()?"chuser":"chme").focus();},80);
   }
   paintChat();
 }
+function chatMe(){return (CH.state&&CH.state.me)||"";}
 function paintChat(){
   if(!M.on||M.view!=="chat")return;
   // Messages of ours that the helper has now logged, or that never will be.
@@ -1276,9 +1286,9 @@ function paintChat(){
   if(CH.armed&&now-CH.armed>4000){
     CH.armed=0;$("chforget").textContent="Remove";$("chforget").className="";
   }
-  if(CH.addBusy&&now-CH.addBusy>10000){
+  if(CH.addBusy&&now-CH.addBusy>20000){
     CH.addBusy=0;
-    addStat("No answer from the chat helper. Try again in a moment","bad");
+    addStat("No answer. Try again in a moment","bad");
   }
   // Redrawn when something changed, and every quarter of a minute for the
   // minutes in "Working · 14 of 25 min" — not four times a second: a rebuilt
@@ -1289,6 +1299,25 @@ function paintChat(){
   CH.drawn=key;
   if(CH.sub==="list")drawFriends();
   else if(CH.sub==="conv")drawConv();
+  else drawAdd();
+}
+// Requests, above the friends: who has asked, and two answers each.
+function drawRequests(){
+  const box=$("chreqs");box.textContent="";
+  for(const q of (CH.state&&CH.state.requests)||[]){
+    const row=document.createElement("div");row.className="chreq";
+    const t=document.createElement("span");t.className="chft";
+    const b=document.createElement("b");b.textContent=q.u;   // typed elsewhere
+    const s=document.createElement("span");s.textContent="wants to be friends";
+    t.appendChild(b);t.appendChild(s);
+    const no=document.createElement("button");no.className="chbtn soft";no.textContent="Ignore";
+    no.addEventListener("click",e=>{e.stopPropagation();mpost("chat.ignore."+q.id);});
+    const yes=document.createElement("button");yes.className="chbtn";yes.textContent="Accept";
+    yes.addEventListener("click",e=>{e.stopPropagation();yes.disabled=true;
+      yes.textContent="…";mpost("chat.accept."+q.id);});
+    row.appendChild(chatAvatar(q.u));row.appendChild(t);row.appendChild(no);row.appendChild(yes);
+    box.appendChild(row);
+  }
 }
 function chatAvatar(name){
   const d=document.createElement("span");
@@ -1303,12 +1332,12 @@ function drawFriends(){
   box.textContent="";
   const empty=t=>{const e=document.createElement("div");e.className="chempty";
     e.textContent=t;box.appendChild(e);};
-  if(!c){empty("Connecting…");return;}
+  if(!c){$("chreqs").textContent="";empty("Connecting…");return;}
+  drawRequests();
   // On a break first, then at work, then the rest: who you could talk to now.
   const rank=f=>{const w=chatWhere(f).c;return w==="on"?0:w==="work"?1:2;};
   const fr=(c.friends||[]).slice().sort((a,b)=>rank(a)-rank(b)||a.n.localeCompare(b.n));
-  if(!fr.length)empty("No friends yet. One of you makes a code and sends it "+
-    "to the other.");
+  if(!fr.length&&!((c.requests||[]).length))empty("No friends yet.");
   for(const f of fr){
     const w=chatWhere(f);
     const row=document.createElement("div");
@@ -1389,72 +1418,68 @@ function chatSend(){
   $("chtext").value="";$("chsend").disabled=true;
   CH.stick=true;CH.drawn="";paintChat();
 }
+// What the helper says back. "done" and "bad" answer whatever was asked last
+// — a request sent, a name saved, a friend removed — and "added" is a friend
+// made in the background, by somebody accepting you.
 function chatNote(n){
-  if(n.k==="invited"){
-    CH.addBusy=0;
-    if(CH.sub!=="add")return;
-    $("chform").hidden=true;
-    addStat(n.n+"’s code is on your clipboard. Send it to "+n.n+
-      " privately: whoever has it can read what you two write.","ok",
-      [["Copy again",()=>mpost("chat.copy."+n.id)],["Done",()=>chatShow("list")]]);
-  }else if(n.k==="joined"){
-    CH.addBusy=0;
-    chatShow("list");
-    chatLine(n.n+" added. Write whenever you like: it arrives at "+n.n+
-      "’s next break.","ok");
-  }else if(n.k==="bad"){
-    CH.addBusy=0;
-    addStat(n.x,"bad");
-  }else if(n.k==="copied"){
-    if(CH.sub==="conv")chatLine("Code copied. Send it only to "+n.n+".","ok");
-  }else if(n.k==="forgot"){
-    if(CH.sub!=="list")chatShow("list");
-    chatLine(n.x+" removed.","");
+  const busy=CH.addBusy;
+  CH.addBusy=0;
+  if(n.k==="bad"){
+    if(CH.sub==="add")addStat(n.x,"bad"); else chatLine(n.x,"bad");
+  }else if(n.k==="done"){
+    if(CH.sub==="add"&&busy){
+      addReset();
+      addStat(n.x,"ok");
+    }else if(CH.sub==="conv"&&!chatFriend(CH.friend)){
+      chatShow("list");chatLine(n.x,"");
+    }else if(n.x){
+      chatLine(n.x,"ok");
+    }
+  }else if(n.k==="added"){
+    chatLine(n.x,"ok");
   }else if(n.k==="error"){
     chatLine(n.x,"bad");
   }
 }
 function addReset(){
   CH.addBusy=0;
-  $("chform").hidden=false;$("chpaste").hidden=true;
-  $("chname").value="";$("chcode").value="";
+  $("chuser").value="";$("chme").value="";
   addStat("","");
+  drawAdd();
 }
-function addStat(text,cls,acts){
+// The add view is two forms, one at a time: choose your username, and then,
+// for good, ask for somebody else's.
+function drawAdd(){
+  const me=chatMe();
+  $("chmeform").hidden=!!me;
+  $("chaskform").hidden=!me;
+  const waiting=((CH.state&&CH.state.pending)||[]).map(p=>p.u);
+  $("chmine").textContent=me?("You are "+me+". "+(waiting.length
+    ?"Waiting for "+waiting.join(", ")+".":"They accept, and you're friends.")):"";
+}
+function addStat(text,cls){
   const el=$("chstat");
   el.className=cls||"";el.textContent=text;
-  if(acts&&acts.length){
-    const row=document.createElement("div");row.className="acts";
-    for(const [label,fn] of acts){
-      const b=document.createElement("button");
-      b.className="chbtn"+(row.childNodes.length?"":" soft");
-      b.textContent=label;b.addEventListener("click",fn);
-      row.appendChild(b);
-    }
-    el.appendChild(row);
-  }
 }
-function addName(){
-  const n=$("chname").value.trim();
-  if(!n){addStat("Give them a name first","bad");$("chname").focus();}
-  return n;
-}
-function chatInvite(){
-  const n=addName();
+function chatSetName(){
+  const n=$("chme").value.trim();
   if(!n||CH.addBusy)return;
   CH.addBusy=Date.now();
-  addStat("Making a code…","");
-  mpost("chat.invite."+n);
+  mpost("chat.setname."+n);
 }
-function chatJoin(){
-  const n=addName();
+function chatAdd(){
+  const n=$("chuser").value.trim();
   if(!n||CH.addBusy)return;
-  // Whatever was pasted around it — "here's my code: tt1-…." — is left behind.
-  const m=/tt1-[A-Za-z0-9_-]+/.exec($("chcode").value);
-  if(!m){addStat("That doesn’t look like a code. A code starts with tt1-","bad");return;}
   CH.addBusy=Date.now();
-  addStat("Adding "+n+"…","");
-  mpost("chat.join."+m[0]+"."+n);
+  addStat("Sending…","");
+  mpost("chat.add."+n);
+}
+function chatRename(){
+  const n=$("chnewname").value.trim();
+  if(!n)return;
+  mpost("chat.rename."+CH.friend+"."+n);
+  $("chrenameform").hidden=true;$("chmore").hidden=false;
+  $("chtext").focus();
 }
 
 /* ---- wiring ---- */
@@ -1512,16 +1537,19 @@ $("chtext").addEventListener("input",()=>{
   $("chsend").disabled=!$("chtext").value.trim();
 });
 $("chsend").addEventListener("click",chatSend);
-$("chmake").addEventListener("click",chatInvite);
-$("chhave").addEventListener("click",()=>{
-  $("chpaste").hidden=false;addStat("","");$("chcode").focus();
+$("chask").addEventListener("click",chatAdd);
+$("chmesave").addEventListener("click",chatSetName);
+$("chrename").addEventListener("click",()=>{
+  const f=chatFriend(CH.friend);
+  if(!f)return;
+  $("chmore").hidden=true;$("chrenameform").hidden=false;
+  $("chnewname").value=f.n;$("chnewname").focus();$("chnewname").select();
 });
-$("chjoin").addEventListener("click",chatJoin);
-$("chcopy").addEventListener("click",()=>mpost("chat.copy."+CH.friend));
+$("chrenamesave").addEventListener("click",chatRename);
 $("chforget").addEventListener("click",()=>{
-  // Twice, because it cannot be taken back from here: the code is gone from
-  // this Mac, and so is what you said, and only a new code makes a friend
-  // again.
+  // Twice, because it cannot be taken back from here: the friendship is gone
+  // from this Mac, and so is what you said, and only a new request makes a
+  // friend again.
   const f=chatFriend(CH.friend);
   if(!f)return;
   if(CH.armed){CH.armed=0;mpost("chat.forget."+f.id);return;}
@@ -2022,13 +2050,15 @@ ticker=setInterval(paint,250);
     if(m[1]!=="menu")menuShow(m[1]==="spotify"?"sp":"note");
     return;
   }
-  // #demo=chat, #demo=chatconv, #demo=chatadd: Messages with two friends,
-  // one of them on a break and mid-conversation.
+  // #demo=chat, #demo=chatconv, #demo=chatadd, #demo=chatnew: Messages with
+  // three friends, one of them on a break and mid-conversation, a request
+  // waiting, and (chatnew) no username of your own yet.
   if(m[1].startsWith("chat")){
-    const chat={run:"demo",relay:{ok:true,x:""},note:null,
-      friends:[{id:"e5f6a7b8",n:"Ola",ph:"work",since:now-14*60,until:now+11*60,st:now-14*60,read:0,unread:0},
-               {id:"a1b2c3d4",n:"Kari",ph:"break",since:now-3*60,until:now+2*60,st:now-3*60,read:0,unread:2},
-               {id:"c9d8e7f6",n:"Per",ph:"off",since:now-3600,until:0,st:now-3600,read:0,unread:0}],
+    const chat={run:"demo",me:m[1]==="chatnew"?"":"halvor",relay:{ok:true,x:""},note:null,
+      requests:[{id:"0123456789abcdef",u:"malin"}],pending:[{id:"fedcba9876543210",u:"per"}],
+      friends:[{id:"e5f6a7b8",n:"Ola",u:"ola",ph:"work",since:now-14*60,until:now+11*60,st:now-14*60,read:0,unread:0},
+               {id:"a1b2c3d4",n:"Kari",u:"kari",ph:"break",since:now-3*60,until:now+2*60,st:now-3*60,read:0,unread:2},
+               {id:"c9d8e7f6",n:"Per",u:"",ph:"off",since:now-3600,until:0,st:now-3600,read:0,unread:0}],
       log:[{q:1,f:"a1b2c3d4",me:false,x:"Pause nå? 🍅",t:now-90,s:""},
            {q:2,f:"a1b2c3d4",me:true,x:"Ja! Fem minutter, så tilbake til TDT4100",t:now-80,s:"sent"},
            {q:3,f:"a1b2c3d4",me:false,x:"Samme her. Hvordan går øvingen?",t:now-30,s:""}]};
@@ -2037,7 +2067,7 @@ ticker=setInterval(paint,250);
     menuOpen();
     if(m[1]!=="menu")menuShow("chat");
     if(m[1]==="chatconv")chatShow("conv","a1b2c3d4");
-    if(m[1]==="chatadd")chatShow("add");
+    if(m[1]==="chatadd"||m[1]==="chatnew")chatShow("add");
     return;
   }
   if(demo[m[1]])window.ttSetState(demo[m[1]]);
