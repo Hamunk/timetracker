@@ -205,7 +205,16 @@ padding:48px 24px}
 #setup .step{display:none;text-align:center}
 #setup .step.on{display:block}
 #setup .step .lead{margin-left:auto;margin-right:auto;max-width:400px}
-#setup .srows,#setup .choice,#setup .more{text-align:left}
+#setup .srows,#setup .choice,#setup .more,#setup .list{text-align:left}
+/* What an extra needs once it is on, under its switch: an Allow button, a
+   username, a calendar. Hidden while it is off, so the step reads as four
+   switches and nothing else until one is used. */
+.ex{border-bottom:1px solid var(--line)}
+.ex .set{border-bottom:0}
+.exmore{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:0 4px 14px;
+font-size:12.5px;color:var(--mut)}
+.exmore .grow{flex:1 1 200px;min-width:0}
+.exmore input[type=text],.exmore select{flex:1 1 180px;min-width:0;width:auto}
 #setup .foot{display:flex;align-items:center;gap:10px;margin-top:30px}
 #setup .step[data-step="0"] .foot{justify-content:center}
 #setup .pips{display:flex;gap:6px}
@@ -309,7 +318,7 @@ border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
       <p class="lead">Courses, projects, anything. Add more later.</p>
       <div class="srows" id="o-rows"></div>
       <p class="more"><button class="btn quiet" id="o-more" style="padding-left:0">+ Add another</button></p>
-      <div class="foot"><div class="pips"><i class="on"></i><i></i><i></i></div><span class="spacer"></span>
+      <div class="foot"><div class="pips"><i class="on"></i><i></i><i></i><i></i></div><span class="spacer"></span>
         <button class="btn primary" id="o-subjects">Continue</button></div>
     </div>
     <div class="step" data-step="2">
@@ -317,14 +326,21 @@ border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
       <p class="lead">Work for 25 minutes, then a tomato fills the screen and offers a 5-minute break.</p>
       <div class="choice on" data-pomo="on"><span>🍅</span><div><b>On by default</b><small>You can untick it when you start</small></div></div>
       <div class="choice" data-pomo="off"><span>⏱</span><div><b>Off by default</b><small>Just the timer</small></div></div>
-      <div class="foot"><div class="pips"><i></i><i class="on"></i><i></i></div><span class="spacer"></span>
+      <div class="foot"><div class="pips"><i></i><i class="on"></i><i></i><i></i></div><span class="spacer"></span>
         <button class="btn primary" id="o-pomo">Continue</button></div>
     </div>
     <div class="step" data-step="3">
+      <h1>Extras</h1>
+      <p class="lead">All optional. Change them any time in Settings.</p>
+      <div class="list" id="o-extras"></div>
+      <div class="foot"><div class="pips"><i></i><i></i><i class="on"></i><i></i></div><span class="spacer"></span>
+        <button class="btn primary" id="o-extras-go">Continue</button></div>
+    </div>
+    <div class="step" data-step="4">
       <h1>You're set</h1>
       <p class="lead">Start from this window. Or, faster: press <kbd>⌘</kbd> <kbd>Space</kbd>, type
       <b class="verb">time</b> and a subject, and press <kbd>Return</kbd>.</p>
-      <div class="foot"><div class="pips"><i></i><i></i><i class="on"></i></div><span class="spacer"></span>
+      <div class="foot"><div class="pips"><i></i><i></i><i></i><i class="on"></i></div><span class="spacer"></span>
         <button class="btn primary" id="o-done">Start tracking</button></div>
     </div>
   </div>
@@ -962,7 +978,7 @@ function setupOpen(){SETUP.shown=true;$("setup").classList.add("on");setupStep(0
   const rows=$("o-rows");rows.replaceChildren();for(let i=0;i<3;i++)addSetupRow();}
 function setupStep(n){SETUP.step=n;
   for(const s of document.querySelectorAll("#setup .step"))s.classList.toggle("on",+s.dataset.step===n);
-  const f=document.querySelector('#setup .step.on input');if(f)setTimeout(()=>f.focus(),0);}
+  const f=document.querySelector('#setup .step.on input[type=text]');if(f)setTimeout(()=>f.focus(),0);}
 function addSetupRow(){
   const n=el("input",{type:"text",placeholder:"Name",maxlength:"120"});
   const c=el("input",{type:"text",placeholder:"Code (optional)",maxlength:"40"});
@@ -994,7 +1010,73 @@ for(const ch of document.querySelectorAll("#setup .choice"))ch.addEventListener(
   for(const x of document.querySelectorAll("#setup .choice"))x.classList.toggle("on",x===ch);});
 $("o-pomo").addEventListener("click",async()=>{
   const r=await post("/api/setconf",{changes:{pomodoro_default:SETUP.pomo}});
-  if(!r.ok){toast(r.message,true);return;}setupStep(3);});
+  if(!r.ok){toast(r.message,true);return;}buildExtras();setupStep(3);});
+
+// The extras, each off until it is switched on: a new user who presses
+// Continue without reading gets a plain break screen, and everything here is
+// something they chose. Switched on, each shows what it needs right there —
+// the permission, a username, a calendar — because a permission asked for in
+// the middle of the first break is the worst time to be asked anything.
+const EXTRAS=[
+  {key:"spotify",title:"Spotify",text:"Play your playlists on a break",grant:"spotify",
+   note:"macOS asks once. Add playlists later in Settings."},
+  {key:"reminders",title:"Reminders",text:"Save a note from a break",grant:"reminders",
+   note:"macOS asks once."},
+  {key:"chat",title:"Messages",text:"See where friends are in their pomodoro, and write on breaks"},
+  {key:"paint_calendar",title:"Calendar",text:"Copy your sessions to a calendar"}];
+const EX={spotify:false,reminders:false,chat:false,paint_calendar:false};
+let exName=null,exCal=null;
+function buildExtras(){
+  const box=$("o-extras");box.replaceChildren();
+  for(const x of EXTRAS){
+    const t=el("input",{type:"checkbox"});t.checked=EX[x.key];
+    const more=el("div",{class:"exmore",hidden:!EX[x.key]});
+    t.addEventListener("change",()=>{EX[x.key]=t.checked;more.hidden=!t.checked;
+      const f=more.querySelector("input[type=text]");if(t.checked&&f)f.focus();});
+    if(x.grant){
+      const b=el("button",{class:"btn"},"Allow");
+      b.addEventListener("click",async()=>{b.disabled=true;
+        const r=await post("/api/grant",{tool:x.grant});toast(r.message,!r.ok);
+        b.disabled=false;b.textContent="Allow again";});
+      more.append(el("span",{class:"grow"},x.note),b);
+    }else if(x.key==="chat"){
+      exName=el("input",{type:"text",maxlength:"24",placeholder:"Your username (optional)"});
+      more.append(exName,el("span",{class:"grow",style:"flex-basis:100%"},
+        "Friends add you by it. Messages are encrypted and pass through a public relay, "+
+        "which sees when you start and end breaks."));
+    }else{
+      exCal=el("select",{},el("option",{value:""},"Choose a calendar"));
+      exCal.disabled=true;
+      const b=el("button",{class:"btn"},"Allow");
+      b.addEventListener("click",async()=>{b.disabled=true;b.textContent="Asking…";
+        const r=await post("/api/paint/refresh",{});
+        let list=[];try{list=(await get("/api/settings")).paint_choices||[];}catch(e){}
+        exCal.replaceChildren(el("option",{value:""},list.length?"Choose a calendar":"No calendars found"));
+        for(const c of list)exCal.append(el("option",{value:c.title},c.source?c.title+" ("+c.source+")":c.title));
+        exCal.disabled=!list.length;b.disabled=false;b.textContent="Allow again";
+        if(!r.ok&&!list.length)toast(r.message,true);});
+      more.append(b,exCal,el("span",{class:"grow",style:"flex-basis:100%"},
+        "Use an empty calendar of its own: its recent events are kept matching your log."));
+    }
+    box.append(el("div",{class:"ex"},
+      el("div",{class:"set"},el("span",{class:"lbl"},x.title,el("small",{},x.text)),
+        el("label",{class:"toggle"},t,el("span",{}))),more));
+  }
+}
+$("o-extras-go").addEventListener("click",async()=>{
+  const b=$("o-extras-go");b.disabled=true;
+  const on=k=>EX[k]?"on":"off";
+  let r=await post("/api/setconf",{changes:{spotify:on("spotify"),reminders:on("reminders"),
+    chat:on("chat"),paint_calendar:on("paint_calendar")}});
+  if(r.ok&&EX.chat&&exName&&exName.value.trim()){
+    r=await post("/api/friends/name",{name:exName.value.trim()});
+    if(!r.ok)exName.focus();
+  }
+  if(r.ok&&EX.paint_calendar&&exCal&&exCal.value)r=await post("/api/paint/calendar",{name:exCal.value});
+  b.disabled=false;
+  if(!r.ok){toast(r.message,true);return;}
+  setupStep(4);
+});
 $("o-done").addEventListener("click",async()=>{
   const r=await post("/api/setup/done",{});
   if(!r.ok){toast(r.message,true);return;}
