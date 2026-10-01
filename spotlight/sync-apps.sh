@@ -213,6 +213,11 @@ make_app "$VERB categories" "categories" \
 make_app "$VERB data" "data" \
     'exec /usr/bin/open "${TIMETRACK_DIR:-$HOME/.timetrack}"' > /dev/null
 
+# Asks before it changes anything, and says what it did.
+if [[ -f "$BIN_DIR/update.sh" ]]; then
+    make_app "$VERB update" "update" 'exec "$BIN/update.sh"' > /dev/null
+fi
+
 # Detached, not exec'd: if the app process *is* the server it stays alive while
 # the browser polls, and LaunchServices then refuses to relaunch the app.
 make_app "$VERB dashboard" "dashboard" \

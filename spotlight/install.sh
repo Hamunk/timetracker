@@ -113,7 +113,7 @@ install_file() {
 }
 for f in action.sh notify.sh toggle.sh newcat.sh sync-apps.sh prompt.sh start.sh \
          settings.sh pomodoro-watch.sh pause-media.sh spotify.sh \
-         paint-calendar.sh; do
+         paint-calendar.sh update.sh; do
     install_file "$SRC_DIR/$f" "$f" 755
 done
 for f in dashboard.py migrate.py; do
