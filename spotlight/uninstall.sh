@@ -18,7 +18,11 @@ fi
 # The overlay, the Spotify agent and the chat each leave a pid behind; use it.
 for PIDFILE in "$DATA_DIR/.tomato-overlay.pid" "$DATA_DIR/.tomato-spotify.pid" \
                "$DATA_DIR/.tomato-chat.pid"; do
-    read -r p < "$PIDFILE" 2>/dev/null || continue
+    # The test first: redirections apply left to right, so `2>/dev/null`
+    # after `<` came too late to hide a missing file, and every uninstall
+    # with no break running printed two "No such file" errors.
+    [[ -f "$PIDFILE" ]] || continue
+    read -r p < "$PIDFILE" || continue
     [[ "$p" =~ ^[0-9]+$ ]] && kill "$p" 2>/dev/null
 done
 # Then a sweep for whatever those pids did not account for — matched by the

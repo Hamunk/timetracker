@@ -246,6 +246,32 @@ STEPS = [
 ]
 
 
+def has_data():
+    """Anything worth a snapshot: a logged row, a category, a friend, a setting.
+
+    A first install has only the headers install.sh wrote a moment ago, and
+    "Backed up your data" was the second thing a new user ever read. Decided
+    by the files and not by there being no previous version: an install
+    removed with its data kept, and installed again, has no previous version
+    either, and has everything to lose.
+    """
+    for name in ("sessions.tsv", "categories.tsv"):
+        try:
+            with open(os.path.join(DATA_DIR, name), encoding="utf-8",
+                      errors="replace") as f:
+                if sum(1 for line in f if line.strip()) > 1:
+                    return True
+        except OSError:
+            pass
+    for name in ("settings.tsv", "friends.tsv", "state"):
+        try:
+            if os.path.getsize(os.path.join(DATA_DIR, name)) > 0:
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def install(old, new):
     found = data_version()
     if found > DATA_VERSION:
@@ -253,9 +279,10 @@ def install(old, new):
             f"this version reads up to {DATA_VERSION}).\n"
             "Install that version or a newer one. Nothing was changed.")
         return 3
-    where = backup(f"{old}-to-{new}")
-    if where:
-        say(f"Backed up your data to {where}")
+    if has_data():
+        where = backup(f"{old}-to-{new}")
+        if where:
+            say(f"Backed up your data to {where}")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     for number, step in STEPS:
         step(stamp)

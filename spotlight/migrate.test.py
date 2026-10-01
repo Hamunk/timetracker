@@ -136,15 +136,23 @@ def newer():
 
 
 def fresh():
-    print("a fresh install gets no example categories")
-    d = folder({"categories.tsv": CAT5 + "\n", "sessions.tsv": SESS9 + "\n"})
-    run(d, "--install", "none", "2.0.0")
+    print("a fresh install gets no example categories, and no backup of nothing")
+    d = folder({"categories.tsv": CAT5 + "\n", "sessions.tsv": SESS9 + "\n",
+                "settings.tsv": "", "state": ""})
+    r = run(d, "--install", "none", "2.0.0")
     check("still empty", read(d, "categories.tsv") == CAT5 + "\n")
+    check("no snapshot, and nothing said about one",
+          backups(d) == [] and "Backed up" not in r.stdout)
+    print("data kept through an uninstall is backed up when installed again")
+    d = folder({"categories.tsv": CAT5 + "\nX\t\t\t1767000000\t\n", "sessions.tsv": SESS9 + "\n"})
+    run(d, "--install", "none", "2.0.0")
+    check("snapshot taken though there was no previous version", len(backups(d)) == 1)
 
 
 def pruning():
     print("ten snapshots are kept")
-    d = folder({"sessions.tsv": SESS9 + "\n"})
+    d = folder({"sessions.tsv": SESS9 + "\n2026-01-01T10:00:00+0100\t"
+                "2026-01-01T11:00:00+0100\t3600\tX\n"})
     os.makedirs(os.path.join(d, "backups"))
     for i in range(12):
         os.makedirs(os.path.join(d, "backups", "2025010%d-0000%02d-old" % (1 + i // 10, i)))
