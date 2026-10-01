@@ -47,6 +47,14 @@
 # can post to. Measured against a live audio oracle, seven variants, with
 # the Accessibility grant confirmed live. Do not spend another evening on
 # it without new evidence that the platform changed.
+#
+# What was not tried then is skipping the key and asking the Now Playing
+# service itself, which is where the key ends up: MediaRemote's pause
+# command, sent by ttpause. It is a different door, not the same one knocked
+# on harder — a command the service is built to take, not an event it is
+# built to ignore — and it costs nothing when it is refused. It was not
+# measured against a live Canvas player, because the one Mac it was written
+# on was in use; whoever next has a lecture playing at a tomato is the test.
 
 set -uo pipefail
 
@@ -248,6 +256,14 @@ for p in Music TV Spotify; do
 done
 running VLC && pause_vlc
 running "QuickTime Player" && pause_quicktime
+
+# Whatever F8 would pause, by asking the Now Playing service (see ttpause.swift
+# and the note at the top). Last in the list only by position: it runs with
+# the rest and waits for nobody.
+if [[ -x "$BIN_DIR/ttpause" ]]; then
+    "$BIN_DIR/ttpause" >/dev/null 2>&1 &
+    PIDS+=($!)
+fi
 
 reap
 exit 0

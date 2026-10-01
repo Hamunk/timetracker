@@ -158,6 +158,13 @@ HELPER_APP="$APPS_DIR/TimeTracker Prompt.app"
 HELPER_BIN="$HELPER_APP/Contents/MacOS/ttprompt"
 if command -v swiftc >/dev/null 2>&1; then
     mkdir -p "$APPS_DIR"
+    # The Now Playing pause, for pause-media.sh. A bare binary in bin rather
+    # than a bundle: it asks macOS for no permission, so there is no grant for
+    # a bundle's name to carry. Built beside and renamed in, like the scripts.
+    if [[ ! -x "$BIN_DIR/ttpause" || "$SRC_DIR/ttpause.swift" -nt "$BIN_DIR/ttpause" ]]; then
+        swiftc -O "$SRC_DIR/ttpause.swift" -o "$BIN_DIR/.ttpause.$$" \
+            && mv -f "$BIN_DIR/.ttpause.$$" "$BIN_DIR/ttpause"
+    fi
     # Rebuild only when something actually changed. This matters more than it
     # looks: an up-to-date bundle is left completely untouched, and touching
     # it is exactly what macOS forbids (see below).
