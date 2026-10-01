@@ -191,15 +191,23 @@ transition:opacity .2s,transform .2s;pointer-events:none;max-width:80vw;z-index:
 #toast.on{opacity:1;transform:translate(-50%,0)}
 #toast.bad{background:var(--accent);color:#fff}
 
-/* --- first run --- */
+/* --- first run ---
+   In the middle of the window both ways, whatever its size. The column was
+   centred and everything in it left-aligned and short, so the welcome sat
+   left of centre and high, with half the window empty below it. Auto
+   margins in a flex box centre it vertically and, unlike centring the box,
+   still let a window too short for it scroll from the top. */
 #setup{position:fixed;inset:0;background:var(--bg);z-index:20;display:none;overflow-y:auto}
-#setup.on{display:block}
-#setup .wrap{max-width:clamp(420px,40vw,520px);margin:0 auto;
-padding:clamp(48px,14vh,120px) 24px 60px}
-#setup h1{font-size:30px;margin-bottom:8px}
-#setup .step{display:none}
+#setup.on{display:flex}
+#setup .wrap{width:100%;max-width:clamp(420px,40vw,520px);margin:auto;
+padding:48px 24px}
+#setup h1{font-size:clamp(26px,1.2vw + 18px,36px);margin-bottom:8px}
+#setup .step{display:none;text-align:center}
 #setup .step.on{display:block}
+#setup .step .lead{margin-left:auto;margin-right:auto;max-width:400px}
+#setup .srows,#setup .choice,#setup .more{text-align:left}
 #setup .foot{display:flex;align-items:center;gap:10px;margin-top:30px}
+#setup .step[data-step="0"] .foot{justify-content:center}
 #setup .pips{display:flex;gap:6px}
 #setup .pips i{width:6px;height:6px;border-radius:50%;background:var(--line)}
 #setup .pips i.on{background:var(--accent)}
@@ -300,7 +308,7 @@ border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
       <h1>What do you work on?</h1>
       <p class="lead">Courses, projects, anything. Add more later.</p>
       <div class="srows" id="o-rows"></div>
-      <p><button class="btn quiet" id="o-more" style="padding-left:0">+ Add another</button></p>
+      <p class="more"><button class="btn quiet" id="o-more" style="padding-left:0">+ Add another</button></p>
       <div class="foot"><div class="pips"><i class="on"></i><i></i><i></i></div><span class="spacer"></span>
         <button class="btn primary" id="o-subjects">Continue</button></div>
     </div>
