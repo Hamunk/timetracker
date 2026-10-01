@@ -30,8 +30,13 @@ input,textarea,.sel{-webkit-user-select:text;user-select:text}
 button{font:inherit;color:inherit}
 a{color:var(--accent);text-decoration:none}
 
-/* --- sidebar --- */
-#nav{width:176px;flex:none;background:var(--side);padding:52px 10px 16px;
+/* --- sidebar ---
+   Everything that has a size here scales with the window between a floor
+   and a ceiling, rather than being one size that suits one window: at the
+   smallest the app allows the content gets the room, and at full screen it
+   does not sit as a thin column in a dark field. */
+#nav{width:clamp(132px,16vw,208px);flex:none;background:var(--side);
+padding:52px clamp(8px,1vw,14px) 16px;
 display:flex;flex-direction:column;gap:1px;border-right:1px solid var(--line)}
 #nav a{display:block;padding:6px 12px;border-radius:7px;color:var(--mut);font-size:13.5px}
 #nav a:hover{color:var(--fg)}
@@ -43,13 +48,14 @@ font-variant-numeric:tabular-nums;line-height:1.4}
 overflow:hidden;text-overflow:ellipsis}
 #nav .badge{float:right;min-width:18px;height:18px;border-radius:9px;background:var(--accent);
 color:#fff;font-size:11px;font-weight:600;text-align:center;line-height:18px;padding:0 5px}
-main{flex:1;overflow-y:auto;padding:44px 48px 64px}
-.page{max-width:640px;margin:0 auto;display:none}
+main{flex:1;min-width:0;overflow-y:auto;
+padding:clamp(40px,7vh,64px) clamp(20px,5vw,80px) 64px}
+.page{max-width:clamp(560px,60vw,780px);margin:0 auto;display:none}
 .page.on{display:block}
-@media (max-width:640px){#nav{width:120px}main{padding:40px 22px 50px}}
 
 /* --- type --- */
-h1{font-size:26px;font-weight:300;letter-spacing:-.01em;margin:0 0 6px}
+h1{font-size:clamp(22px,1.1vw + 15px,32px);font-weight:300;letter-spacing:-.01em;
+margin:0 0 6px;overflow-wrap:anywhere}
 h2{font-size:13px;font-weight:500;color:var(--mut);margin:34px 0 8px}
 .lead{color:var(--mut);margin:0 0 22px}
 .mut{color:var(--mut)}
@@ -94,43 +100,52 @@ background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s}
 .item.click:hover{background:var(--hover)}
 .dot{width:9px;height:9px;border-radius:50%;flex:none}
 .item .title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item .code{color:var(--mut);font-size:12.5px;white-space:nowrap}
-.item .meta{color:var(--mut);font-size:12.5px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.item .code{color:var(--mut);font-size:12.5px;white-space:nowrap;flex:0 1 auto;
+min-width:0;max-width:30%;overflow:hidden;text-overflow:ellipsis}
+.item .meta{color:var(--mut);font-size:12.5px;white-space:nowrap;font-variant-numeric:tabular-nums;
+flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .item .go{color:var(--accent);font-size:13px;opacity:0;transition:opacity .1s}
 .item.click:hover .go{opacity:1}
 .item .hov{opacity:0;transition:opacity .1s}
 .item:hover .hov,.item.open .hov{opacity:1}
 .form{padding:12px 4px 16px 25px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
-.form .line{display:flex;gap:8px;align-items:center}
+/* A row of fields wraps rather than squeezing: each field asks for room for
+   a few words, and what does not fit goes to the next line. */
+.form .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.form .line>input,.form .line>select,.form .line>label.f{flex:1 1 170px;min-width:0}
+.form .line>input.short{flex:1 1 110px;max-width:220px}
 .form label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut);flex:1}
 .empty{color:var(--mut);padding:18px 4px}
 
 /* --- now --- */
 .run{padding:6px 0 4px}
 .run .code{color:var(--mut);font-size:13px;margin-bottom:2px}
-.run h1{font-size:30px;margin-bottom:0}
-.clock{font-size:64px;font-weight:200;letter-spacing:-.02em;font-variant-numeric:tabular-nums;
-line-height:1.1;margin:18px 0 6px}
+.run h1{font-size:clamp(24px,1.6vw + 14px,38px);margin-bottom:0}
+/* The one large thing on screen, by the width and by the height: in a short
+   window it is the clock that gives way, not the Stop button. */
+.clock{font-size:clamp(40px,min(5.5vw + 14px,13vh),88px);font-weight:200;letter-spacing:-.02em;
+font-variant-numeric:tabular-nums;line-height:1.1;margin:clamp(8px,2.5vh,24px) 0 6px}
 .run .plan{color:var(--mut)}
 .run .pomo{color:var(--mut);font-size:13px;margin-top:4px;font-variant-numeric:tabular-nums}
 .run .pomo i{display:inline-block;width:7px;height:7px;border-radius:50%;border:1px solid var(--faint);
 margin-left:4px;vertical-align:1px}
 .run .pomo i.f{background:var(--accent);border-color:var(--accent)}
-.run .acts{margin-top:22px;display:flex;gap:8px}
+.run .acts{margin-top:clamp(14px,3vh,28px);display:flex;gap:8px}
 .idle h1{color:var(--mut)}
-.totals{display:flex;gap:28px;margin-top:30px;color:var(--mut);font-size:13px}
+.totals{display:flex;flex-wrap:wrap;gap:6px 28px;margin-top:30px;color:var(--mut);font-size:13px}
 .totals b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums;margin-left:6px}
 .stopform{margin-top:20px;display:flex;flex-direction:column;gap:10px;max-width:420px}
 
 /* --- history --- */
-.stats{display:flex;gap:40px;margin:18px 0 6px}
+.stats{display:flex;flex-wrap:wrap;gap:14px clamp(24px,5vw,64px);margin:18px 0 6px}
 .stats div{display:flex;flex-direction:column}
 .stats span{color:var(--mut);font-size:12.5px}
-.stats b{font-size:22px;font-weight:300;font-variant-numeric:tabular-nums}
+.stats b{font-size:clamp(20px,1vw + 12px,28px);font-weight:300;font-variant-numeric:tabular-nums}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 td,th{padding:8px 4px;border-bottom:1px solid var(--line);text-align:left}
 th{font-weight:400;color:var(--mut);font-size:12.5px}
-td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;width:80px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;width:clamp(56px,9vw,96px);
+white-space:nowrap}
 .day{margin-top:22px}
 .dayhead{display:flex;justify-content:space-between;color:var(--mut);font-size:12.5px;
 padding:0 4px 6px;border-bottom:1px solid var(--line)}
@@ -141,13 +156,14 @@ padding:0 4px 6px;border-bottom:1px solid var(--line)}
 .flag{color:var(--accent);font-size:12px;margin-left:6px}
 
 /* --- settings --- */
-.set{display:flex;align-items:center;gap:16px;padding:10px 4px;border-bottom:1px solid var(--line);min-height:46px}
-.set .lbl{flex:1;min-width:0}
+.set{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;padding:10px 4px;
+border-bottom:1px solid var(--line);min-height:46px}
+.set .lbl{flex:1 1 200px;min-width:0}
 .set .lbl small{display:block;color:var(--mut);font-size:12.5px}
 .set input[type=number]{width:84px;text-align:right}
 .set input.key{width:84px;text-align:center}
 .set .unit{color:var(--mut);font-size:12.5px;width:28px}
-.set select{width:220px}
+.set select{width:min(240px,100%)}
 .saved{color:var(--ok);font-size:12px;opacity:0;transition:opacity .2s}
 .saved.on{opacity:1}
 
@@ -155,6 +171,18 @@ padding:0 4px 6px;border-bottom:1px solid var(--line)}
 .help p{margin:0 0 12px}
 .help table td:first-child{white-space:nowrap;width:1%;padding-right:20px}
 .help code{font:13px ui-monospace,Menlo,monospace}
+
+/* --- narrow and short windows --- */
+@media (max-width:760px){
+  .item .code{display:none}
+  .sess .time{width:72px}
+  .help table td:first-child{white-space:normal}
+}
+@media (max-height:540px){
+  #nav{padding-top:44px}
+  h2{margin-top:24px}
+  .totals{margin-top:20px}
+}
 
 /* --- toast --- */
 #toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;
@@ -166,7 +194,8 @@ transition:opacity .2s,transform .2s;pointer-events:none;max-width:80vw;z-index:
 /* --- first run --- */
 #setup{position:fixed;inset:0;background:var(--bg);z-index:20;display:none;overflow-y:auto}
 #setup.on{display:block}
-#setup .wrap{max-width:460px;margin:0 auto;padding:90px 24px 60px}
+#setup .wrap{max-width:clamp(420px,40vw,520px);margin:0 auto;
+padding:clamp(48px,14vh,120px) 24px 60px}
 #setup h1{font-size:30px;margin-bottom:8px}
 #setup .step{display:none}
 #setup .step.on{display:block}
@@ -215,7 +244,7 @@ border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
   <div class="form" style="padding-left:4px;border:0">
     <div class="line">
       <input type="text" id="s-name" placeholder="Name, like Calculus" maxlength="120">
-      <input type="text" id="s-code" placeholder="Code (optional)" maxlength="40" style="max-width:160px">
+      <input type="text" id="s-code" class="short" placeholder="Code (optional)" maxlength="40">
       <button class="btn primary" id="s-add">Add</button>
     </div>
   </div>
@@ -531,13 +560,16 @@ function dayLabel(d){
 function hm(iso){return iso.slice(11,16);}
 function sessionRow(r){
   const notes=[r.plan,r.recap].filter(Boolean).join(" → ");
+  // The name is the part that gives way when the window is narrow, so
+  // nothing that matters rides at the end of it: the pomodoros sit with the
+  // duration, and the 8-hour flag leads the second line.
   const row=el("div",{class:"item click sess"},
     el("span",{class:"time"},hm(r.start)+"–"+hm(r.end)),dot(r.key),
-    el("span",{class:"body"},el("span",{class:"title"},r.title,
-      r.note==="AUTOCLOSED"?el("span",{class:"flag"},"Stopped after 8h"):null,
-      r.pomodoros?el("span",{class:"mut",style:"margin-left:8px;font-size:12px"},"🍅"+r.pomodoros):null),
-      notes?el("span",{class:"notes"},notes):null),
-    el("span",{class:"meta"},dur(r.dur)));
+    el("span",{class:"body"},el("span",{class:"title"},r.title),
+      r.note==="AUTOCLOSED"||notes?el("span",{class:"notes"},
+        r.note==="AUTOCLOSED"?el("span",{class:"flag",style:"margin:0 8px 0 0"},"Stopped after 8h"):null,
+        notes):null),
+    el("span",{class:"meta"},dur(r.dur)+(r.pomodoros?"  🍅"+r.pomodoros:"")));
   row.addEventListener("click",()=>{if(r.start_ep==null||r.end_ep==null){
     toast("This row's times can't be read, so it can't be edited here",true);return;}
     editing=r;row.replaceWith(editForm(r));});
@@ -851,7 +883,7 @@ function renderSettings(){
   // Reminders
   const rm=[...rows(["reminders"])];
   if(on("reminders")){
-    const ln=el("input",{type:"text",value:SET.reminders_list,maxlength:"60",style:"width:220px"});
+    const ln=el("input",{type:"text",value:SET.reminders_list,maxlength:"60",style:"width:min(240px,100%)"});
     const ok=el("span",{class:"saved"},"Saved");
     ln.addEventListener("change",async()=>{const r=await post("/api/reminders/list",{name:ln.value.trim()});
       if(!r.ok)toast(r.message,true);else{ok.classList.add("on");setTimeout(()=>ok.classList.remove("on"),1400);}});
