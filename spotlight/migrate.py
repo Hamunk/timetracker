@@ -71,7 +71,7 @@ COURSE_CODE = re.compile(r"([A-ZÆØÅ]{2,4}\s?\d{4})", re.IGNORECASE)
 # the overlay's heartbeat, a command on its way to a helper, a server's
 # token — and restoring one of those would restore a moment, not data.
 KEEP_DOTFILES = {".setup-done", ".tomato-found", ".paint-adopted",
-                 ".paint-calendars.tsv"}
+                 ".paint-calendars.tsv", ".paint-id", ".paint-ledger.tsv"}
 MAX_BACKUP_FILE = 50 << 20
 
 

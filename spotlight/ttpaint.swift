@@ -20,22 +20,24 @@
 //
 //   CAL     <calendar title>
 //   WINDOW  <from_epoch>  <to_epoch>
-//   STRICT  1                       (only on the first paint into a calendar)
+//   ID      <this install's six-letter mark>
+//   LEGACY  1                       (a calendar an older version painted)
 //   S       <start_epoch> <end_epoch>  <title>  <notes>
 //
 // Notes carry their line breaks as \x1f, because the request is a TSV and a
 // TSV has one row per line — the same trick sync-apps.sh uses to read a file
 // whose fields may be empty.
 //
-// It **reconciles** rather than appends, and that is the whole design. Every
-// run makes the window match the log exactly: sessions with no event get one,
-// events with no session are removed, and an event whose notes have changed is
-// updated in place. That is what makes it safe to run after every single
-// session close — the tenth run over the same week does nothing at all — and
-// it is also what makes a correction in the dashboard show up in the calendar
-// without anything having to remember what it did last time.
+// It **reconciles** rather than appends: every run brings its own events in
+// the window into line with the log, so it is safe to run after every single
+// session close, and a correction in History reaches the calendar with nothing
+// having to remember what was done last time. What counts as its own is
+// decided in paintplan.swift — events carrying its mark, untouched since it
+// wrote them — and is the reason any calendar, the one you actually use
+// included, can be chosen. Everything else in it is never updated and never
+// removed.
 //
-// Two rules keep the reconcile from being dangerous:
+// Two more rules:
 //
 // 1. It only ever touches the one calendar it was told to, and it will not go
 //    looking for one. A title that matches nothing is an error, never a
@@ -44,14 +46,9 @@
 //    nowhere.
 // 2. It only ever touches the window it was given, which never extends into
 //    the future. Tomorrow's plans are not this program's business.
-// 3. The first paint into a calendar refuses to delete anything. Reconciling
-//    means removing events that no longer match a session, which is safe only
-//    because everything in the calendar was put there by a previous run — and
-//    that is a claim which is exactly false the first time. So a calendar that
-//    already has something in the window is reported and left completely
-//    alone, and the shell only records the calendar as adopted once a paint
-//    has actually succeeded. Without this, picking your real calendar out of a
-//    dropdown by mistake would silently delete a fortnight of your life.
+//
+// Built joined to paintplan.swift into one file (see install.sh): Swift lets
+// only one file of a build have top-level code.
 
 import EventKit
 import Foundation
@@ -63,6 +60,9 @@ import Foundation
 let requestName = ".paint-request.tsv"
 let resultName = ".paint-result.tsv"
 let listName = ".paint-calendars.tsv"
+// Which sessions have been painted, per calendar: how an event you deleted is
+// told from one never painted (rule 3 in paintplan.swift).
+let ledgerName = ".paint-ledger.tsv"
 
 func requestPath() -> String? {
     for arg in CommandLine.arguments.dropFirst()
@@ -139,20 +139,6 @@ if listing {
 
 // --- the request -------------------------------------------------------------
 
-struct Session {
-    let start: Date
-    let end: Date
-    let title: String
-    let notes: String
-    // Identity for the reconcile. Deliberately *not* including the notes: a
-    // reworded plan should update the event it belongs to, not delete it and
-    // make a new one — and a server that rewraps a description on the way back
-    // would otherwise have this rewriting the same week for ever.
-    var key: String {
-        return "\(Int(start.timeIntervalSince1970))|\(Int(end.timeIntervalSince1970))|\(title)"
-    }
-}
-
 guard let raw = try? String(contentsOfFile: request!, encoding: .utf8) else {
     finish(["error", "could not read the request"], code: 1)
 }
@@ -160,8 +146,9 @@ guard let raw = try? String(contentsOfFile: request!, encoding: .utf8) else {
 var calTitle = ""
 var from: Date? = nil
 var to: Date? = nil
-var strict = false
-var wanted: [String: Session] = [:]
+var installID = ""
+var legacy = false
+var wants: [Want] = []
 
 for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
     let f = line.components(separatedBy: "\t")
@@ -173,19 +160,16 @@ for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
             from = Date(timeIntervalSince1970: a)
             to = Date(timeIntervalSince1970: b)
         }
-    case "STRICT" where f.count >= 2:
-        strict = f[1] == "1"
+    case "ID" where f.count >= 2:
+        installID = f[1]
+    case "LEGACY" where f.count >= 2:
+        legacy = f[1] == "1"
     case "S" where f.count >= 4:
-        guard let a = Double(f[1]), let b = Double(f[2]), b > a else { continue }
+        guard let a = Int(f[1]), let b = Int(f[2]), b > a else { continue }
         let title = f[3].trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { continue }
-        let notes = f.count > 4
-            ? f[4].replacingOccurrences(of: "\u{1f}", with: "\n") : ""
-        let s = Session(start: Date(timeIntervalSince1970: a),
-                        end: Date(timeIntervalSince1970: b),
-                        title: title, notes: notes)
-        // Two sessions cannot share a key without being the same session.
-        wanted[s.key] = s
+        let body = f.count > 4 ? f[4].replacingOccurrences(of: "\u{1f}", with: "\n") : ""
+        wants.append(Want(start: a, end: b, title: title, body: body))
     default:
         continue
     }
@@ -194,6 +178,11 @@ for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
 guard !calTitle.isEmpty, let windowStart = from, let windowEnd = to,
       windowEnd > windowStart else {
     finish(["error", "malformed request"], code: 1)
+}
+// No mark, no paint: an event written without one could never be told from
+// yours again, and so could never be corrected or removed.
+guard isInstallID(installID) else {
+    finish(["error", "no install mark"], code: 1)
 }
 
 // Rule 1: the named calendar, or nothing. No nearest match, no new calendar.
@@ -205,67 +194,74 @@ guard let calendar = target else {
     finish(["nocal", calTitle], code: 1)
 }
 
+// --- the ledger ----------------------------------------------------------------
+// One line per painted session: calendar title, then the session's start.
+// Other calendars' lines ride through untouched.
+
+let ledgerPath = dir + "/" + ledgerName
+var ledgerOthers: [String] = []
+var ledger = Set<Int>()
+if let text = try? String(contentsOfFile: ledgerPath, encoding: .utf8) {
+    for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        let f = line.components(separatedBy: "\t")
+        if f.count == 2, f[0] == calendar.title, let sid = Int(f[1]) {
+            ledger.insert(sid)
+        } else {
+            ledgerOthers.append(String(line))
+        }
+    }
+}
+
 // --- reconcile ---------------------------------------------------------------
 
 let predicate = store.predicateForEvents(withStart: windowStart, end: windowEnd,
                                          calendars: [calendar])
-let existing = store.events(matching: predicate)
-
-// Rule 3. Counted before a single change is made, and nothing is committed on
-// the way out — a refusal must leave the calendar exactly as it was found.
-if strict {
-    var strangers = 0
-    for ev in existing {
-        guard let s = ev.startDate, let e = ev.endDate else { continue }
-        let key = "\(Int(s.timeIntervalSince1970))|\(Int(e.timeIntervalSince1970))|\(ev.title ?? "")"
-        if wanted[key] == nil { strangers += 1 }
-    }
-    if strangers > 0 {
-        finish(["notempty", calendar.title, String(strangers)], code: 1)
-    }
+// All-day events are never this program's: a session has a start and an end.
+let existing = store.events(matching: predicate).filter { !$0.isAllDay }
+let seen: [Seen] = existing.enumerated().compactMap { i, ev in
+    guard let s = ev.startDate, let e = ev.endDate else { return nil }
+    return Seen(ref: i, start: Int(s.timeIntervalSince1970), end: Int(e.timeIntervalSince1970),
+                title: ev.title ?? "", notes: ev.notes ?? "")
 }
+var wantBySid: [Int: Want] = [:]
+for w in wants where wantBySid[w.sid] == nil { wantBySid[w.sid] = w }
 
-var seen = Set<String>()
+let decided = plan(wants: wants, seen: seen, id: installID, legacy: legacy, ledger: ledger)
+
 var removed = 0, updated = 0, created = 0
 var failure: String? = nil
 
-for ev in existing {
-    guard let s = ev.startDate, let e = ev.endDate else { continue }
-    let key = "\(Int(s.timeIntervalSince1970))|\(Int(e.timeIntervalSince1970))|\(ev.title ?? "")"
-    if let want = wanted[key], !seen.contains(key) {
-        seen.insert(key)
-        // Same slot, same name: keep the event and its identity — which is
-        // what stops every paint from churning the whole week through the
-        // server — and only correct the description if it has drifted.
-        if (ev.notes ?? "") != want.notes {
-            ev.notes = want.notes.isEmpty ? nil : want.notes
-            do { try store.save(ev, span: .thisEvent, commit: false); updated += 1 }
-            catch { failure = failure ?? error.localizedDescription }
-        }
-    } else {
-        // Either the session behind it was edited or deleted, or it is a
-        // duplicate of one already matched. Rule 2 keeps this inside the
-        // window, and the calendar is ours alone, so there is nothing here
-        // that was not put here by a previous run.
-        do { try store.remove(ev, span: .thisEvent, commit: false); removed += 1 }
-        catch { failure = failure ?? error.localizedDescription }
-    }
+func fill(_ ev: EKEvent, _ w: Want) {
+    ev.title = w.title
+    ev.startDate = Date(timeIntervalSince1970: TimeInterval(w.start))
+    ev.endDate = Date(timeIntervalSince1970: TimeInterval(w.end))
+    ev.notes = notes(installID, w)
 }
 
-for (key, s) in wanted where !seen.contains(key) {
-    let ev = EKEvent(eventStore: store)
-    ev.calendar = calendar
-    ev.title = s.title
-    ev.startDate = s.start
-    ev.endDate = s.end
-    ev.timeZone = TimeZone.current
-    if !s.notes.isEmpty { ev.notes = s.notes }
-    // A record of what already happened should never buzz, and should never
-    // make you look busy to anyone reading your availability.
-    ev.alarms = nil
-    if calendar.allowsContentModifications { ev.availability = .free }
-    do { try store.save(ev, span: .thisEvent, commit: false); created += 1 }
-    catch { failure = failure ?? error.localizedDescription }
+for act in decided.acts {
+    switch act {
+    case .create(let sid):
+        guard let w = wantBySid[sid] else { continue }
+        let ev = EKEvent(eventStore: store)
+        ev.calendar = calendar
+        ev.timeZone = TimeZone.current
+        fill(ev, w)
+        // A record of what already happened should never buzz, and should
+        // never make you look busy to anyone reading your availability.
+        ev.alarms = nil
+        ev.availability = .free
+        do { try store.save(ev, span: .thisEvent, commit: false); created += 1 }
+        catch { failure = failure ?? error.localizedDescription }
+    case .update(let ref, let sid):
+        guard let w = wantBySid[sid] else { continue }
+        let ev = existing[ref]
+        fill(ev, w)
+        do { try store.save(ev, span: .thisEvent, commit: false); updated += 1 }
+        catch { failure = failure ?? error.localizedDescription }
+    case .remove(let ref):
+        do { try store.remove(existing[ref], span: .thisEvent, commit: false); removed += 1 }
+        catch { failure = failure ?? error.localizedDescription }
+    }
 }
 
 do {
@@ -277,5 +273,12 @@ do {
 if let f = failure {
     finish(["error", f], code: 1)
 }
+// Written only once the calendar has the events: a ledger that ran ahead of
+// a failed commit would read as sessions you had deleted, and never repaint
+// them.
+let mine = decided.ledger.sorted().map { "\(calendar.title)\t\($0)" }
+try? ((ledgerOthers + mine).joined(separator: "\n") + "\n")
+    .write(toFile: ledgerPath, atomically: true, encoding: .utf8)
+
 finish(["ok", calendar.title, String(created), String(updated), String(removed)],
        code: 0)

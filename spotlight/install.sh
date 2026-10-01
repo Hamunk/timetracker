@@ -366,13 +366,18 @@ EOF
     CAL_APP="$APPS_DIR/TimeTracker Calendar.app"
     CAL_BIN="$CAL_APP/Contents/MacOS/ttpaint"
     if [[ ! -x "$CAL_BIN" || "$SRC_DIR/ttpaint.swift" -nt "$CAL_BIN" \
+          || "$SRC_DIR/paintplan.swift" -nt "$CAL_BIN" \
           || $(bundle_id_of "$CAL_APP") != "$BID_PREFIX.calendar.helper" ]]; then
         printf 'Compiling calendar painter...\n'
         CSTAGE="$APPS_DIR/.calendar-build.$$"
         rm -rf "$CSTAGE"
         mkdir -p "$CSTAGE/TimeTracker Calendar.app/Contents/MacOS"
         CSTAGE_APP="$CSTAGE/TimeTracker Calendar.app"
-        swiftc -O "$SRC_DIR/ttpaint.swift" -o "$CSTAGE_APP/Contents/MacOS/ttpaint"
+        # Joined into one file: what to touch is decided in paintplan.swift,
+        # apart from EventKit so its cases can be run without a calendar, and
+        # Swift allows top-level code in only one file of a build.
+        cat "$SRC_DIR/paintplan.swift" "$SRC_DIR/ttpaint.swift" > "$CSTAGE/ttpaint.swift"
+        swiftc -O "$CSTAGE/ttpaint.swift" -o "$CSTAGE_APP/Contents/MacOS/ttpaint"
         cat > "$CSTAGE_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -934,7 +934,7 @@ function renderSettings(){
     sel.addEventListener("change",async()=>{const r=await post("/api/paint/calendar",{name:sel.value});toast(r.message,!r.ok);});
     cal.push(permRow("calendar",r=>{if(r.calendars)fillCalendars(sel,r.calendars,sel.value);}));
     cal.push(el("div",{class:"set"},el("span",{class:"lbl"},"Calendar",
-      el("small",{},"Use an empty calendar of its own: its recent events are rewritten to match your log.")),sel));
+      el("small",{},"Any calendar, your main one too. Tomat only changes events it added, and never one you have edited.")),sel));
     cal.push(...rows(["paint_days","paint_min_minutes"]));
   }
   out.push(el("h2",{},"Calendar"),el("div",{class:"list"},...cal));
@@ -1056,7 +1056,7 @@ const EXTRAS=[
   {key:"reminders",title:"Reminders",text:"Save a note from a break",grant:"reminders"},
   {key:"chat",title:"Messages",text:"See where friends are in their pomodoro, and write on breaks"},
   {key:"paint_calendar",title:"Calendar",text:"Copy your sessions to a calendar",grant:"calendar",
-   note:"Use an empty calendar of its own: its recent events are kept matching your log."}];
+   note:"Any calendar, your main one too. Tomat only changes events it added, and never one you have edited."}];
 const EX={spotify:false,reminders:false,chat:false,paint_calendar:false};
 const EX_OK={};
 let exName=null,exCal=null;

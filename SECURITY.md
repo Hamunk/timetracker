@@ -106,22 +106,36 @@ open the three permission helpers, and start an update. Every one of those:
 - moves deleted rows to `sessions.deleted.tsv` and deleted categories to
   `categories.deleted.tsv`. No route removes a logged hour.
 
-`/api/grant` opens one of `<verb> spotify.app`, `<verb> reminders.app` or
-`<verb> calendar.app`, chosen from a three-entry list; the request supplies
-only which of the three. Each helper asks macOS for its permission and reports
-back in a dialog, which is what typing the verb into the launcher does.
+`/api/grant` launches one of three helpers, chosen from a fixed list — the
+Spotify helper with `--check`, the Reminders helper with no note, or the
+calendar listing — and the request supplies only which of the three. Each
+asks macOS for its permission, writes nothing but its one-word answer into
+the data folder, and the route reads that answer back.
 
 Rule to keep: if a future route needs to do more than call `action.sh` with
 fixed arguments, stop and re-read this section.
 
-## 3b. Calendar writing. MEDIUM, it deletes events
+## 3b. Calendar writing. MEDIUM, it updates and deletes events
 
-Making the window match the log means removing events in it that no longer
-match a session. That is safe only because everything in the calendar was put
-there by a previous write, and that claim is false the first time. So the
-first write into any calendar refuses to delete anything, reports what it
-found, and commits nothing. Only a write that succeeded records the calendar
-as adopted (`.paint-adopted`); until then every request carries `STRICT 1`.
+Keeping a window of the calendar matching the log means updating and removing
+events, in a calendar that may be the one you use for everything else. So it
+only ever updates or removes an event that proves it is its own:
+
+- Every event it writes ends with a mark, `Tomat · <install>-<session>-
+  <fingerprint>`. The install part is six random letters made once per data
+  folder (`.paint-id`), so two installs painting one calendar never touch each
+  other's events. The fingerprint is of exactly what was written.
+- An event without this install's mark is never updated or removed, whatever
+  it looks like. An event with it whose fingerprint no longer matches has been
+  edited by somebody, and is never updated or removed either.
+- An event it painted and you deleted is not painted again: `.paint-ledger.tsv`
+  records which sessions were painted into which calendar.
+- A calendar an older version painted (`.paint-adopted`, from before marks)
+  is the one exception: there, an unmarked event with exactly a session's
+  start, end and title is taken over and marked. Anything else in it is left.
+- Every way the decision can go wrong leaves an event in place rather than
+  removing one. The decision is `paintplan.swift`, which has no calendar
+  access at all; `paintplan.test.sh` puts every case to it.
 
 - It touches only the one calendar it was named, and only the window it was
   given, which never extends past now. Future events are never a deletion

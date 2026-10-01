@@ -32,10 +32,15 @@ DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 SESS_FILE="$DATA_DIR/sessions.tsv"
 CAT_FILE="$DATA_DIR/categories.tsv"
 CAL_FILE="$DATA_DIR/paint-calendar"
-# The calendar a paint has actually succeeded against. Until a title appears
-# here, every paint into it is sent STRICT and will refuse rather than delete
-# anything it did not put there — see rule 3 in ttpaint.swift. This is the
-# whole protection against choosing your real calendar from the dropdown.
+# Six letters, made once per install, that end the mark on every event it
+# paints. paintplan.swift touches nothing without its own mark, so this is
+# what lets a scratch install and the real one paint the same calendar
+# without either ever removing the other's events.
+ID_FILE="$DATA_DIR/.paint-id"
+# A calendar an older version painted, before events carried a mark. Written
+# by that version after its first successful paint, and only read now: its
+# unmarked events for a session are that version's work and are taken over,
+# where anywhere else they would be left alone. See rule 4 in paintplan.swift.
 ADOPTED_FILE="$DATA_DIR/.paint-adopted"
 REQ_FILE="$DATA_DIR/.paint-request.tsv"
 RESULT_FILE="$DATA_DIR/.paint-result.tsv"
@@ -135,10 +140,18 @@ trap 'rm -f "$tmp"; rm -rf "$PAINT_LOCK" 2>/dev/null' EXIT INT TERM
 adopted=""
 [[ -r "$ADOPTED_FILE" ]] && adopted=$(head -1 "$ADOPTED_FILE" 2>/dev/null)
 
+id=""
+[[ -r "$ID_FILE" ]] && id=$(head -1 "$ID_FILE" 2>/dev/null)
+if [[ ! "$id" =~ ^[a-z0-9]{6}$ ]]; then
+    id=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 6)
+    printf '%s\n' "$id" > "$ID_FILE"
+fi
+
 {
     printf 'CAL\t%s\n' "$cal"
     printf 'WINDOW\t%s\t%s\n' "$from" "$to"
-    [[ "$adopted" == "$cal" ]] || printf 'STRICT\t1\n'
+    printf 'ID\t%s\n' "$id"
+    [[ -n "$adopted" && "$adopted" == "$cal" ]] && printf 'LEGACY\t1\n'
 
     # One awk pass over the log. Dates arrive as ISO with an offset, which
     # mktime cannot read, so the epoch is rebuilt from the fields directly and
@@ -235,13 +248,7 @@ if [[ -f "$RESULT_FILE" ]]; then
 fi
 case "${status:-}" in
     ok)
-        # It worked, so from here on the calendar is ours to reconcile freely.
-        printf '%s\n' "$cal" > "$ADOPTED_FILE"
         say "Wrote to “${f2}”: ${f3:-0} added, ${f4:-0} updated, ${f5:-0} removed."
-        ;;
-    notempty)
-        say "“${f2}” already has ${f3:-some} event(s) in the last ${days} days that TimeTracker did not put there, so nothing was touched. Writing rewrites the whole window; give it an empty calendar of its own."
-        exit 1
         ;;
     denied)
         say "Calendar access refused. Turn it on in System Settings > Privacy & Security > Calendars."
