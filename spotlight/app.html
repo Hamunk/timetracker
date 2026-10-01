@@ -486,8 +486,13 @@ function renderNow(force){
     const acts=el("div",{class:"acts"});
     const stopForm=el("div",{class:"stopform",hidden:true});
     const recap=el("input",{type:"text",placeholder:"What did you get done?",maxlength:"500"});
-    const doStop=async()=>{const res=await post("/api/stop",{recap:recap.value});
-      toast(res.message,!res.ok);poll();};
+    // Redrawn by force, as the start form is: Enter leaves the focus in the
+    // recap box, and a poll leaves a box somebody is typing in alone — so the
+    // timer stopped and the form stayed, and its Stop said nothing was running.
+    let stopping=false;
+    const doStop=async()=>{if(stopping)return;stopping=true;
+      const res=await post("/api/stop",{recap:recap.value});
+      toast(res.message,!res.ok);await poll();renderNow(true);};
     onEnter(recap,doStop);
     stopForm.append(recap,el("div",{class:"row-actions"},
       el("button",{class:"btn",onclick:()=>{stopForm.hidden=true;acts.hidden=false;}},"Keep working"),
