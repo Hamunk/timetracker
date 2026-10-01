@@ -3,7 +3,8 @@
 #
 #   update.sh           check, ask, install, say how it went — "time update"
 #   update.sh --check   print "<installed><TAB><latest>" and nothing else;
-#                       latest is empty when the releases cannot be reached
+#                       latest is empty when the releases cannot be reached,
+#                       and the installed version when there are none yet
 #   update.sh --yes     install the newest release without asking (the app,
 #                       which has already asked)
 #
@@ -40,12 +41,19 @@ installed=$(head -1 "$BIN_DIR/VERSION" 2>/dev/null || true)
 installed="${installed:-1}"
 
 # The newest vX.Y.Z tag, without the v. Anything else that looks like a tag —
-# a v2.1.0-rc1, a stray "latest" — is not a release and is skipped.
+# a v2.1.0-rc1, a stray "latest" — is not a release and is skipped. Fails
+# only when the repository cannot be reached: one reached with no release on
+# it prints nothing and succeeds. Those were one answer, "Are you online?",
+# which until the first tag was every install's answer however online it was.
 latest_release() {
-    GIT_TERMINAL_PROMPT=0 /usr/bin/git ls-remote --tags --refs "$REPO" 2>/dev/null \
+    local tags
+    tags=$(GIT_TERMINAL_PROMPT=0 /usr/bin/git ls-remote --tags --refs "$REPO" 2>/dev/null) \
+        || return 1
+    printf '%s\n' "$tags" \
         | awk '{ sub("refs/tags/v", "", $2); print $2 }' \
         | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
         | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+    return 0
 }
 
 # True if $1 is a later version than $2. A missing part counts as 0, so the
@@ -85,7 +93,13 @@ say() {
     if [[ "$mode" == "" ]]; then dialog "$1" >/dev/null; else printf '%s\n' "$1"; fi
 }
 
-latest=$(latest_release)
+# No release at all is nothing newer than this, which is what up to date
+# means; so the installed version stands in for the latest.
+if latest=$(latest_release); then
+    latest="${latest:-$installed}"
+else
+    latest=""
+fi
 
 if [[ "$mode" == "--check" ]]; then
     printf '%s\t%s\n' "$installed" "$latest"

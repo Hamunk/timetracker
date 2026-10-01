@@ -878,7 +878,7 @@ def post_update_check(text, whole, body):
     ok, out = run([UPDATE_SH, "--check"], timeout=60)
     installed, _, latest = out.partition("\t")
     if not latest:
-        return False, "Could not check for updates", {"installed": installed}
+        return False, "Could not check for updates. Are you online?", {"installed": installed}
     return True, "", {"installed": installed, "latest": latest}
 
 
