@@ -18,7 +18,14 @@ esac
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 BIN_DIR="$DATA_DIR/bin"
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
+# Out of Spotlight's sight (see sync-apps.sh): the bundles nobody opens.
+HELPERS_DIR="$APPS_DIR/Helpers.noindex"
 VERB="${TIMETRACK_VERB:-time}"
+# What the app is called. A scratch install's carries its verb, so the two
+# are told apart in the Dock and in Spotlight.
+APP_NAME="Tomat"
+[[ "$VERB" == "time" ]] || APP_NAME="Tomat ($VERB)"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 NEW_VERSION=$(head -1 "$SRC_DIR/../VERSION" 2>/dev/null || true)
 NEW_VERSION="${NEW_VERSION:-unknown}"
@@ -33,6 +40,12 @@ fi
 # is a reason to rebuild that no file mtime can express.
 bundle_id_of() {
     /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+        "$1/Contents/Info.plist" 2>/dev/null || true
+}
+# The same for the name a bundle shows — in a permission prompt, and in
+# System Settings beside the switch that answers it.
+bundle_name_of() {
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleName' \
         "$1/Contents/Info.plist" 2>/dev/null || true
 }
 
@@ -154,10 +167,22 @@ rm -f "$BIN_DIR/calendar-agent.sh" "$BIN_DIR/calendar_agent.py" \
 # plan prompt still appears, the tracker is untouched, and the cycle is not
 # offered at all — there is no notifications-only imitation of it.
 
-HELPER_APP="$APPS_DIR/TimeTracker Prompt.app"
+# Before 2.0 the helpers sat beside the launchers, where Spotlight listed
+# every one of them, and were called TimeTracker something. Moved rather than
+# rebuilt from nothing: a machine that has since lost its compiler keeps
+# working helpers, and the name check below renames them where it can.
+mkdir -p "$APPS_DIR" "$HELPERS_DIR"
+for pair in "TimeTracker Prompt:Tomat Prompt" "TimeTracker Reminders:Tomat Reminders" \
+            "TimeTracker Chat:Tomat Chat" "TimeTracker Calendar:Tomat Calendar"; do
+    old="$APPS_DIR/${pair%%:*}.app" new="$HELPERS_DIR/${pair#*:}.app"
+    [[ -d "$old" ]] || continue
+    "$LSREGISTER" -u "$old" >/dev/null 2>&1
+    if [[ -d "$new" ]]; then rm -rf "$old"; else mv "$old" "$new"; fi
+done
+
+HELPER_APP="$HELPERS_DIR/Tomat Prompt.app"
 HELPER_BIN="$HELPER_APP/Contents/MacOS/ttprompt"
 if command -v swiftc >/dev/null 2>&1; then
-    mkdir -p "$APPS_DIR"
     # The Now Playing pause, for pause-media.sh. A bare binary in bin rather
     # than a bundle: it asks macOS for no permission, so there is no grant for
     # a bundle's name to carry. Built beside and renamed in, like the scripts.
@@ -170,7 +195,8 @@ if command -v swiftc >/dev/null 2>&1; then
     # it is exactly what macOS forbids (see below).
     if [[ ! -x "$HELPER_BIN" || "$SRC_DIR/ttprompt.swift" -nt "$HELPER_BIN" \
           || "$SRC_DIR/tomato.html" -nt "$HELPER_BIN" \
-          || $(bundle_id_of "$HELPER_APP") != "$BID_PREFIX.prompt.helper" ]]; then
+          || $(bundle_id_of "$HELPER_APP") != "$BID_PREFIX.prompt.helper" \
+          || $(bundle_name_of "$HELPER_APP") != "Tomat Prompt" ]]; then
         printf 'Compiling prompt/overlay helper (takes ~1 min)...\n'
         # Build a complete bundle beside the real one and swap it in.
         # Once this bundle is code-signed, macOS App Management (Sonoma and
@@ -182,9 +208,9 @@ if command -v swiftc >/dev/null 2>&1; then
         # compile off to the side, sign last, then delete and move.
         STAGE="$APPS_DIR/.prompt-build.$$"
         rm -rf "$STAGE"
-        mkdir -p "$STAGE/TimeTracker Prompt.app/Contents/MacOS" \
-                 "$STAGE/TimeTracker Prompt.app/Contents/Resources"
-        STAGE_APP="$STAGE/TimeTracker Prompt.app"
+        mkdir -p "$STAGE/Tomat Prompt.app/Contents/MacOS" \
+                 "$STAGE/Tomat Prompt.app/Contents/Resources"
+        STAGE_APP="$STAGE/Tomat Prompt.app"
         swiftc -O "$SRC_DIR/ttprompt.swift" -o "$STAGE_APP/Contents/MacOS/ttprompt"
         cp "$SRC_DIR/tomato.html" "$STAGE_APP/Contents/Resources/tomato.html"
         # The page shows text written on other people's machines, so the copy
@@ -212,9 +238,9 @@ PY
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>TimeTracker Prompt</string>
+	<string>Tomat Prompt</string>
 	<key>CFBundleDisplayName</key>
-	<string>TimeTracker Prompt</string>
+	<string>Tomat Prompt</string>
 	<key>CFBundleExecutable</key>
 	<string>ttprompt</string>
 	<key>CFBundleIdentifier</key>
@@ -242,7 +268,7 @@ EOF
         codesign --force -s - "$STAGE_APP" >/dev/null 2>&1 || \
             printf 'warning: could not ad-hoc sign the prompt helper\n'
         rm -rf "$HELPER_APP"
-        mv "$STAGE_APP" "$APPS_DIR/"
+        mv "$STAGE_APP" "$HELPERS_DIR/"
         rm -rf "$STAGE"
     fi
     # --- reminder capture helper ---------------------------------------------
@@ -252,18 +278,19 @@ EOF
     # separate installer because it needs no permission until the first note is
     # actually saved, and the tracker is unaffected either way: without this
     # binary the watcher simply never offers the entry.
-    REM_APP="$APPS_DIR/TimeTracker Reminders.app"
+    REM_APP="$HELPERS_DIR/Tomat Reminders.app"
     REM_BIN="$REM_APP/Contents/MacOS/ttremind"
     if [[ ! -x "$REM_BIN" || "$SRC_DIR/ttremind.swift" -nt "$REM_BIN" \
-          || $(bundle_id_of "$REM_APP") != "$BID_PREFIX.reminders.helper" ]]; then
+          || $(bundle_id_of "$REM_APP") != "$BID_PREFIX.reminders.helper" \
+          || $(bundle_name_of "$REM_APP") != "Tomat Reminders" ]]; then
         printf 'Compiling reminder helper...\n'
         # Same build-beside-and-swap dance as above: once a bundle is signed,
         # macOS App Management refuses writes into it, and an in-place rebuild
         # dies after the linker has already removed the old executable.
         RSTAGE="$APPS_DIR/.reminders-build.$$"
         rm -rf "$RSTAGE"
-        mkdir -p "$RSTAGE/TimeTracker Reminders.app/Contents/MacOS"
-        RSTAGE_APP="$RSTAGE/TimeTracker Reminders.app"
+        mkdir -p "$RSTAGE/Tomat Reminders.app/Contents/MacOS"
+        RSTAGE_APP="$RSTAGE/Tomat Reminders.app"
         swiftc -O "$SRC_DIR/ttremind.swift" -o "$RSTAGE_APP/Contents/MacOS/ttremind"
         cat > "$RSTAGE_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -271,9 +298,9 @@ EOF
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>TimeTracker Reminders</string>
+	<string>Tomat Reminders</string>
 	<key>CFBundleDisplayName</key>
-	<string>TimeTracker Reminders</string>
+	<string>Tomat Reminders</string>
 	<key>CFBundleExecutable</key>
 	<string>ttremind</string>
 	<key>CFBundleIdentifier</key>
@@ -291,9 +318,9 @@ EOF
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
 	<key>NSRemindersUsageDescription</key>
-	<string>TimeTracker files the notes you write during a pomodoro break in your Reminders.</string>
+	<string>Tomat files the notes you write during a pomodoro break in your Reminders.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>TimeTracker files the notes you write during a pomodoro break in your Reminders.</string>
+	<string>Tomat files the notes you write during a pomodoro break in your Reminders.</string>
 </dict>
 </plist>
 EOF
@@ -302,7 +329,7 @@ EOF
         codesign --force -s - "$RSTAGE_APP" >/dev/null 2>&1 || \
             printf 'warning: could not ad-hoc sign the reminder helper\n'
         rm -rf "$REM_APP"
-        mv "$RSTAGE_APP" "$APPS_DIR/"
+        mv "$RSTAGE_APP" "$HELPERS_DIR/"
         rm -rf "$RSTAGE"
     fi
     # --- break chat helper ---------------------------------------------------
@@ -312,16 +339,17 @@ EOF
     # an identity of its own, which is what an outbound firewall shows you
     # when it asks whether "TimeTracker Chat" may reach ntfy.sh. The watcher
     # runs its binary directly, during a break and never otherwise.
-    CHAT_APP="$APPS_DIR/TimeTracker Chat.app"
+    CHAT_APP="$HELPERS_DIR/Tomat Chat.app"
     CHAT_BIN="$CHAT_APP/Contents/MacOS/ttchat"
     if [[ ! -x "$CHAT_BIN" || "$SRC_DIR/ttchat.swift" -nt "$CHAT_BIN" \
-          || $(bundle_id_of "$CHAT_APP") != "$BID_PREFIX.chat.helper" ]]; then
+          || $(bundle_id_of "$CHAT_APP") != "$BID_PREFIX.chat.helper" \
+          || $(bundle_name_of "$CHAT_APP") != "Tomat Chat" ]]; then
         printf 'Compiling break chat helper...\n'
         # The same build-beside-and-swap as the two helpers above.
         HSTAGE="$APPS_DIR/.chat-build.$$"
         rm -rf "$HSTAGE"
-        mkdir -p "$HSTAGE/TimeTracker Chat.app/Contents/MacOS"
-        HSTAGE_APP="$HSTAGE/TimeTracker Chat.app"
+        mkdir -p "$HSTAGE/Tomat Chat.app/Contents/MacOS"
+        HSTAGE_APP="$HSTAGE/Tomat Chat.app"
         swiftc -O "$SRC_DIR/ttchat.swift" -o "$HSTAGE_APP/Contents/MacOS/ttchat"
         cat > "$HSTAGE_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -329,9 +357,9 @@ EOF
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>TimeTracker Chat</string>
+	<string>Tomat Chat</string>
 	<key>CFBundleDisplayName</key>
-	<string>TimeTracker Chat</string>
+	<string>Tomat Chat</string>
 	<key>CFBundleExecutable</key>
 	<string>ttchat</string>
 	<key>CFBundleIdentifier</key>
@@ -354,7 +382,7 @@ EOF
         codesign --force -s - "$HSTAGE_APP" >/dev/null 2>&1 || \
             printf 'warning: could not ad-hoc sign the break chat helper\n'
         rm -rf "$CHAT_APP"
-        mv "$HSTAGE_APP" "$APPS_DIR/"
+        mv "$HSTAGE_APP" "$HELPERS_DIR/"
         rm -rf "$HSTAGE"
     fi
     # --- calendar painter ------------------------------------------------------
@@ -363,16 +391,17 @@ EOF
     # permission you already granted carries over rather than being asked for
     # again under a new name — the app is doing the opposite job now, but it is
     # the same app asking for the same access to the same store.
-    CAL_APP="$APPS_DIR/TimeTracker Calendar.app"
+    CAL_APP="$HELPERS_DIR/Tomat Calendar.app"
     CAL_BIN="$CAL_APP/Contents/MacOS/ttpaint"
     if [[ ! -x "$CAL_BIN" || "$SRC_DIR/ttpaint.swift" -nt "$CAL_BIN" \
           || "$SRC_DIR/paintplan.swift" -nt "$CAL_BIN" \
-          || $(bundle_id_of "$CAL_APP") != "$BID_PREFIX.calendar.helper" ]]; then
+          || $(bundle_id_of "$CAL_APP") != "$BID_PREFIX.calendar.helper" \
+          || $(bundle_name_of "$CAL_APP") != "Tomat Calendar" ]]; then
         printf 'Compiling calendar painter...\n'
         CSTAGE="$APPS_DIR/.calendar-build.$$"
         rm -rf "$CSTAGE"
-        mkdir -p "$CSTAGE/TimeTracker Calendar.app/Contents/MacOS"
-        CSTAGE_APP="$CSTAGE/TimeTracker Calendar.app"
+        mkdir -p "$CSTAGE/Tomat Calendar.app/Contents/MacOS"
+        CSTAGE_APP="$CSTAGE/Tomat Calendar.app"
         # Joined into one file: what to touch is decided in paintplan.swift,
         # apart from EventKit so its cases can be run without a calendar, and
         # Swift allows top-level code in only one file of a build.
@@ -384,9 +413,9 @@ EOF
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>TimeTracker Calendar</string>
+	<string>Tomat Calendar</string>
 	<key>CFBundleDisplayName</key>
-	<string>TimeTracker Calendar</string>
+	<string>Tomat Calendar</string>
 	<key>CFBundleExecutable</key>
 	<string>ttpaint</string>
 	<key>CFBundleIdentifier</key>
@@ -404,16 +433,16 @@ EOF
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
 	<key>NSCalendarsUsageDescription</key>
-	<string>TimeTracker paints the sessions you have tracked onto a calendar of their own, so you can see what you actually did next to what you planned.</string>
+	<string>Tomat copies the sessions you track into the calendar you choose, so you can see what you did next to what you planned. It only ever changes events it added itself.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>TimeTracker paints the sessions you have tracked onto a calendar of their own, so you can see what you actually did next to what you planned.</string>
+	<string>Tomat copies the sessions you track into the calendar you choose, so you can see what you did next to what you planned. It only ever changes events it added itself.</string>
 </dict>
 </plist>
 EOF
         codesign --force -s - "$CSTAGE_APP" >/dev/null 2>&1 || \
             printf 'warning: could not ad-hoc sign the calendar painter\n'
         rm -rf "$CAL_APP"
-        mv "$CSTAGE_APP" "$APPS_DIR/"
+        mv "$CSTAGE_APP" "$HELPERS_DIR/"
         rm -rf "$CSTAGE"
     fi
     # --- the app -------------------------------------------------------------
@@ -426,9 +455,15 @@ EOF
     # Its environment is a file in Resources, written before signing, since
     # nothing may write into the bundle after. A changed environment is a
     # reason to rebuild, the same as a changed source.
-    APP_NAME="TimeTracker"
-    [[ "$VERB" == "time" ]] || APP_NAME="TimeTracker $VERB"
     MAIN_APP="$APPS_DIR/$APP_NAME.app"
+    # The app under any other name is this one from before the rename —
+    # TimeTracker.app — and a Dock or Spotlight that still found it there
+    # would open a version that no longer exists.
+    for app in "$APPS_DIR"/*.app; do
+        [[ "$app" != "$MAIN_APP" && $(bundle_id_of "$app") == "$BID_PREFIX.app" ]] || continue
+        "$LSREGISTER" -u "$app" >/dev/null 2>&1
+        rm -rf "$app"
+    done
     MAIN_BIN="$MAIN_APP/Contents/MacOS/ttapp"
     APP_ENV=$(printf 'TT_BIN=%s\nTIMETRACK_DIR=%s\nTIMETRACK_APPS_DIR=%s\nTIMETRACK_VERB=%s\nTIMETRACK_BID_PREFIX=%s\n' \
         "$BIN_DIR" "$DATA_DIR" "$APPS_DIR" "$VERB" "$BID_PREFIX")
@@ -507,7 +542,7 @@ fi
 
 "$BIN_DIR/sync-apps.sh"
 
-printf '\nInstalled TimeTracker %s.\n' "$NEW_VERSION"
+printf '\nInstalled Tomat %s.\n' "$NEW_VERSION"
 
 # First run: no setup marker and no categories. The app opens on its setup,
 # which asks what you work on and whether you want pomodoros.
@@ -516,8 +551,6 @@ first_run=0
 if (( first_run )) && [[ "$(awk 'NR>1 && NF' "$DATA_DIR/categories.tsv" | wc -l)" -gt 0 ]]; then
     first_run=0
 fi
-if (( first_run )) && [[ -n "${MAIN_APP:-}" && -d "$MAIN_APP" ]]; then
-    /usr/bin/open "$MAIN_APP" >/dev/null 2>&1 || true
-elif (( first_run )) && [[ -d "$APPS_DIR/$VERB dashboard.app" ]]; then
-    /usr/bin/open -g "$APPS_DIR/$VERB dashboard.app" >/dev/null 2>&1 || true
+if (( first_run )) && [[ -d "$APPS_DIR/$APP_NAME.app" ]]; then
+    /usr/bin/open "$APPS_DIR/$APP_NAME.app" >/dev/null 2>&1 || true
 fi

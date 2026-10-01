@@ -46,7 +46,7 @@ REQ_FILE="$DATA_DIR/.paint-request.tsv"
 RESULT_FILE="$DATA_DIR/.paint-result.tsv"
 LIST_FILE="$DATA_DIR/.paint-calendars.tsv"
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
-HELPER="$APPS_DIR/TimeTracker Calendar.app"
+HELPER="$APPS_DIR/Helpers.noindex/Tomat Calendar.app"
 
 . "$BIN_DIR/settings.sh"
 
@@ -115,7 +115,7 @@ fi
 [[ "$(tt_setting paint_calendar)" == "on" ]] || { say "Calendar painting is off."; exit 0; }
 
 if [[ -z "$cal" ]]; then
-    say "No calendar chosen yet. Pick one in \"${TIMETRACK_VERB:-time} settings\"."
+    say "No calendar chosen yet. Pick one in Tomat's Settings."
     exit 1
 fi
 
@@ -255,7 +255,7 @@ case "${status:-}" in
         exit 1
         ;;
     nocal)
-        say "No writable calendar called “${f2}”. Create it, then pick it in \"time settings\"."
+        say "No writable calendar called “${f2}”. Create it, then pick it in Tomat's Settings."
         exit 1
         ;;
     error)

@@ -107,7 +107,7 @@ acquire_lock() {
         fi
         tries=$(( tries + 1 ))
         if (( tries > 100 )); then
-            printf 'TimeTracker is busy. Try again\n'
+            printf 'Tomat is busy. Try again\n'
             exit 1
         fi
         sleep 0.05
@@ -650,7 +650,7 @@ case "$query" in
         if [[ -z "$key" ]]; then
             action_msg="A subject needs a name"
         elif ! cat_exists "$key"; then
-            action_msg="No subject called $key. Add it in TimeTracker"
+            action_msg="No subject called $key. Add it in Tomat"
         else
             start_key "$key" "$at" "$in_plan" "$in_recap" "$at"
         fi

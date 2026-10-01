@@ -23,6 +23,13 @@ esac
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 CAT_FILE="$DATA_DIR/categories.tsv"
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
+# The bundles that exist only to carry a name and a permission — the overlay,
+# the Spotify remote, the media pause, the calendar and Reminders writers,
+# Messages. Spotlight never indexes a folder whose name ends in .noindex, so
+# typing "time" lists the things you can open and not the machinery behind
+# them. LaunchServices still opens them by path, and macOS still keys their
+# permissions to their bundle ids, which moving them does not change.
+HELPERS_DIR="$APPS_DIR/Helpers.noindex"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 # Reverse-DNS prefix for every generated bundle. It is the identity macOS ties
@@ -63,7 +70,7 @@ BID_PREFIX="${BID_PREFIX:-com.timetracker}"
 VERB="${TIMETRACK_VERB:-time}"
 if [[ "$VERB" == "time" ]]; then BARE_ALIASES=1; else BARE_ALIASES=0; fi
 
-mkdir -p "$APPS_DIR"
+mkdir -p "$APPS_DIR" "$HELPERS_DIR"
 
 xmlesc() {
     local s=$1
@@ -131,12 +138,12 @@ set_aliases() {
     rm -f "$tmp_plist" "$tmp_bin"
 }
 
-# make_app <app-name> <bundle-id-suffix> <body-script>
+# make_app <app-name> <bundle-id-suffix> <body-script> [<folder>]
 make_app() {
-    local app_name="$1" bid="$2" body="$3"
+    local app_name="$1" bid="$2" body="$3" dir="${4:-$APPS_DIR}"
     # A slash would make a folder of the name. Finder shows a colon in a file
     # name as a slash, so "Matte 1/2" is still what Spotlight lists.
-    local app_path="$APPS_DIR/${app_name//\//:}.app"
+    local app_path="$dir/${app_name//\//:}.app"
     local macos_dir="$app_path/Contents/MacOS"
 
     mkdir -p "$macos_dir"
@@ -196,10 +203,8 @@ EOF
         if [[ -n "${TIMETRACK_APPS_DIR:-}" ]]; then
             printf 'export TIMETRACK_APPS_DIR=%q\n' "$TIMETRACK_APPS_DIR"
         fi
-        # The break menu opens "<verb> spotify.app" by name, so a bundle that
-        # did not carry the verb would send the watcher looking for the real
-        # install's name inside the scratch install's folder, and the Spotify
-        # entry would go quietly missing with nothing to explain why.
+        # The app and the notifications name the verb, so a bundle that did
+        # not carry it would have a scratch install talk about "time".
         if [[ -n "${TIMETRACK_VERB:-}" ]]; then
             printf 'export TIMETRACK_VERB=%q\n' "$TIMETRACK_VERB"
         fi
@@ -211,115 +216,59 @@ EOF
     printf '%s\n' "$app_path"
 }
 
-# --- Fixed control apps -----------------------------------------------------
+# --- What Spotlight shows ----------------------------------------------------
+# The app, the toggle, the updater, and one launcher per subject: nothing
+# else answers to "time". There used to be a verb for each page of the app,
+# one per permission, and one for the data folder, and typing the one word
+# this program is reached by listed a dozen rows of it before the one you
+# wanted. The app has all of those, as buttons.
 
 make_app "$VERB" "toggle" 'exec "$BIN/toggle.sh"' > /dev/null
 
-# The data folder is a dotfolder, so Finder hides it. This is the shortcut.
-make_app "$VERB data" "data" \
-    'exec /usr/bin/open "${TIMETRACK_DIR:-$HOME/.timetrack}"' > /dev/null
-
-# Asks before it changes anything, and says what it did.
+# Asks before it changes anything, and says what it did. Kept as a verb for
+# the day the app itself will not open, which is the day it is needed most.
 if [[ -f "$BIN_DIR/update.sh" ]]; then
     make_app "$VERB update" "update" 'exec "$BIN/update.sh"' > /dev/null
 fi
 
-# Verbs that open the app on one of its pages. The app takes the page from a
-# file rather than from its arguments, because `open` hands arguments only to
-# an app that is starting, and these have to work on one that is already
-# open. Without the app (no compiler, so none was built) the same page opens
-# in the browser instead, detached so this bundle is not still running when
-# it is asked for again.
-#
-# "new" and "categories" were three dialogs asking for a key, a name and
-# keywords, and a TSV file opened in TextEdit. The app's Subjects page does
-# both, for anyone.
-APP_NAME="TimeTracker"
-[[ "$VERB" == "time" ]] || APP_NAME="TimeTracker $VERB"
-for pair in dashboard:history settings:settings guide:help new:subjects categories:subjects; do
-    word="${pair%%:*}" page="${pair#*:}"
-    make_app "$VERB $word" "$word" "$(printf 'APP=%q
-if [[ -d "$APP" ]]; then
-    printf %%s\\\\n %q > "${TIMETRACK_DIR:-$HOME/.timetrack}/.app-page"
-    exec /usr/bin/open "$APP"
+# The app is called Tomat, and is found by that or by the word you already
+# type: "time" lists it under the toggle, so nobody has to know its name to
+# open it. A scratch install's carries its verb in its name and answers only
+# to its verb. Built by install.sh; only its aliases are set here.
+APP_NAME="Tomat"
+[[ "$VERB" == "time" ]] || APP_NAME="Tomat ($VERB)"
+# Without a compiler there is no app to build, and the same pages open in
+# the browser instead, under the same name: the one way in is still the one
+# way in. install.sh replaces this with the real app once it can build one.
+if [[ ! -d "$APPS_DIR/$APP_NAME.app" ]]; then
+    make_app "$APP_NAME" "app" 'nohup /usr/bin/python3 "$BIN/dashboard.py" >/dev/null 2>&1 &
+exit 0' > /dev/null
 fi
-nohup /usr/bin/python3 "$BIN/dashboard.py" --page %q >/dev/null 2>&1 &
-exit 0' "$APPS_DIR/$APP_NAME.app" "$page" "$page")" > /dev/null
-done
+if [[ -d "$APPS_DIR/$APP_NAME.app" ]]; then
+    declare -a app_aliases=("$VERB")
+    (( BARE_ALIASES )) && app_aliases+=("TimeTracker" "pomodoro")
+    set_aliases "$APPS_DIR/$APP_NAME.app" "${app_aliases[@]}"
+    unset app_aliases
+fi
 
+# --- The helpers --------------------------------------------------------------
 
-# Not a Spotlight verb like the rest — a bundle whose only purpose is to be
-# a *name*. Everything it runs would work fine from the watcher, but macOS
-# grants Automation permission to the app responsible for the process that
-# sends the event, and the watcher belongs to whichever category app started
-# the session. Without this bundle, "wants to control Google Chrome" would be
-# asked once per category, mid-break, under a different name each time; with
-# it, once, as "TimeTracker Media". Launching it by hand is also the calm way
-# to answer those prompts before a break ever raises them.
-make_app "TimeTracker Media" "media" 'exec "$BIN/pause-media.sh"' > /dev/null
+# A bundle whose only purpose is to be a *name*. Everything it runs would work
+# fine from the watcher, but macOS grants Automation permission to the app
+# responsible for the process that sends the event, and the watcher belongs to
+# whichever category app started the session. Without this bundle, "wants to
+# control Google Chrome" would be asked once per category, mid-break, under a
+# different name each time; with it, once, as "Tomat Media".
+make_app "Tomat Media" "media" 'exec "$BIN/pause-media.sh"' "$HELPERS_DIR" > /dev/null
 
 # The break menu's Spotify remote. Exactly one bundle, and that is a rule
 # rather than a convenience: an Automation grant belongs to the app
 # responsible for the process that sent the event, so a second bundle running
-# the same script would be a second "wants to control Spotify" prompt. This is
-# also a Spotlight verb, unlike the media one, because it is worth running by
-# hand — with no cycle in progress spotify.sh answers the permission prompt at
-# a calm moment and reports what it can see, which is the quickest way to find
-# out whether the grant survived.
-#
-# Arguments are passed through: the app's "--check" is a launch through this
-# bundle too, so that the grant it asks about is this bundle's grant.
+# the same script would be a second "wants to control Spotify" prompt. The
+# app's "--check" is a launch through this bundle too, with its arguments
+# passed through, so that the grant it asks about is this bundle's grant.
 if [[ -f "$BIN_DIR/spotify.sh" ]]; then
-    make_app "$VERB spotify" "spotify" 'exec "$BIN/spotify.sh" "$@"' > /dev/null
-fi
-
-# The break menu's capture box, in the calendar's two-bundle shape: the
-# compiled helper (TimeTracker Reminders.app, built by install.sh) holds the
-# Reminders grant, and this verb exists to make that grant answerable before a
-# break rather than during one. Running it writes no reminder — the helper only
-# asks for access and reports back when there is no note at the path it is
-# handed. The path is what tells it which data folder to answer into: launched
-# bare it answered into ~/.timetrack, and a scratch install's verb waited for
-# an answer in its own folder that never came.
-if [[ -d "$APPS_DIR/TimeTracker Reminders.app" ]]; then
-    make_app "$VERB reminders" "reminders" \
-        'D="${TIMETRACK_DIR:-$HOME/.timetrack}"
-rm -f "$D/.tomato-reminder-result"
-/usr/bin/open -W -g "${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}/TimeTracker Reminders.app" --args "$D/.tomato-reminder"
-IFS=$'"'"'\t'"'"' read -r status detail < "$D/.tomato-reminder-result" 2>/dev/null
-case "${status:-}" in
-    ok)     out="Reminders access is granted. Break notes go to “${detail:-Pause Notes}”." ;;
-    denied) out="Reminders access was refused. Turn it on in System Settings > Privacy & Security > Reminders." ;;
-    *)      out="The reminders helper did not answer. Re-run install.sh." ;;
-esac
-rm -f "$D/.tomato-reminder-result"
-osascript - "$out" >/dev/null 2>&1 <<'"'"'EOS'"'"'
-on run argv
-    tell application "System Events"
-        activate
-        display dialog (item 1 of argv) with title "TimeTracker Reminders" buttons {"OK"} default button "OK"
-    end tell
-end run
-EOS' > /dev/null
-fi
-
-# Paint the log onto a calendar, and say what it did. Also the launch that
-# raises the Calendar permission prompt and refreshes the list of calendars
-# the settings page offers — which is why it is worth being a verb rather
-# than a hidden bundle. (It used to be the other way round: this name once ran
-# an agent that read the calendar and started timers off it. That went.)
-if [[ -f "$BIN_DIR/paint-calendar.sh" ]]; then
-    make_app "$VERB calendar" "calendar" \
-        'out=$("$BIN/paint-calendar.sh" 2>&1)
-[[ -z "$out" ]] && out="Nothing to report."
-osascript - "$out" >/dev/null 2>&1 <<'"'"'EOS'"'"'
-on run argv
-    tell application "System Events"
-        activate
-        display dialog (item 1 of argv) with title "TimeTracker Calendar" buttons {"OK"} default button "OK"
-    end tell
-end run
-EOS' > /dev/null
+    make_app "Tomat Spotify" "spotify" 'exec "$BIN/spotify.sh" "$@"' "$HELPERS_DIR" > /dev/null
 fi
 
 # --- One app per category ---------------------------------------------------
@@ -329,10 +278,10 @@ fi
 # a renamed subject's old bundle too, under its old name, beside the new one.
 declare -a wanted_apps=()
 
-# Names TimeTracker's own apps already hold. A subject called "Settings"
-# with no code would be "time Settings", one folder with "time settings";
-# one called "Spotify" would be written over the bundle the Automation
-# permission belongs to, and no later sync would ever give that back.
+# Names the program's own apps already hold. A subject called "Update" with
+# no code would be "time Update", one folder with "time update" on a disk
+# that ignores case, and whichever was written second would be the only one
+# left.
 taken=""
 for app_path in "$APPS_DIR"/*.app; do
     [[ -e "$app_path" ]] || continue
@@ -410,14 +359,24 @@ fi
 # Listed by bundle-id suffix so re-running this cleans up an older install
 # rather than leaving orphans in Spotlight.
 
-for retired in stop pause resume stats; do
-    for app_path in "$APPS_DIR"/*.app; do
-        [[ -e "$app_path" ]] || continue
-        bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
-            "$app_path/Contents/Info.plist" 2>/dev/null) || continue
-        if [[ "$bid" == *".timetracker.$retired" ]]; then
+#
+# The 2.0 verbs went the same way: one per page of the app, one per
+# permission, and the data folder. So did the helpers' old places beside the
+# launchers — Spotify, Media, and the four install.sh compiles — which are
+# found by id at the top of the folder, where they no longer belong; their
+# replacements are in Helpers.noindex, under the same ids.
+
+for app_path in "$APPS_DIR"/*.app; do
+    [[ -e "$app_path" ]] || continue
+    bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+        "$app_path/Contents/Info.plist" 2>/dev/null) || continue
+    for retired in stop pause resume stats dashboard settings guide new categories \
+                   data reminders calendar spotify media \
+                   prompt.helper reminders.helper chat.helper calendar.helper; do
+        if [[ "$bid" == "$BID_PREFIX.$retired" || "$bid" == *".timetracker.$retired" ]]; then
             "$LSREGISTER" -u "$app_path" >/dev/null 2>&1
             rm -rf "$app_path"
+            break
         fi
     done
 done
@@ -453,6 +412,12 @@ for app_path in "$APPS_DIR"/*.app; do
     [[ -e "$app_path" ]] || continue
     "$LSREGISTER" -f "$app_path" >/dev/null 2>&1
     /usr/bin/mdimport "$app_path" >/dev/null 2>&1
+done
+# Registered, so they open by path at once, but never imported: being out of
+# Spotlight is the reason they are in there.
+for app_path in "$HELPERS_DIR"/*.app; do
+    [[ -e "$app_path" ]] || continue
+    "$LSREGISTER" -f "$app_path" >/dev/null 2>&1
 done
 
 printf 'Synced app bundles in %s\n' "$APPS_DIR"

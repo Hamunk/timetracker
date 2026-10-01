@@ -7,6 +7,6 @@
 
 osascript - "$1" <<'APPLESCRIPT' >/dev/null 2>&1
 on run argv
-    display notification (item 1 of argv) with title "TimeTracker"
+    display notification (item 1 of argv) with title "Tomat"
 end run
 APPLESCRIPT

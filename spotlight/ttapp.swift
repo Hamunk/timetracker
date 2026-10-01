@@ -122,6 +122,9 @@ if let res = Bundle.main.resourcePath,
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let dataDir = env["TIMETRACK_DIR"] ?? home + "/.timetrack"
 let binDir = env["TT_BIN"] ?? dataDir + "/bin"
+// What the bundle is called, which install.sh decides: Tomat, or a scratch
+// install's "Tomat (devtime)".
+let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Tomat"
 
 func installedVersion() -> String {
     return ((try? String(contentsOfFile: binDir + "/VERSION", encoding: .utf8)) ?? "")
@@ -174,7 +177,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
                        styleMask: [.titled, .closable, .miniaturizable, .resizable,
                                    .fullSizeContentView],
                        backing: .buffered, defer: false)
-        win.title = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "TimeTracker"
+        win.title = appName
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.minSize = NSSize(width: 600, height: 440)
@@ -226,7 +229,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         p.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async { self?.serverEnded() }
         }
-        do { try p.run() } catch { return showError("TimeTracker could not start.") }
+        do { try p.run() } catch { return showError("\(appName) could not start.") }
         server = p
         DispatchQueue.global().async { [weak self] in
             // One line, then the pipe is left alone: the server writes nothing
@@ -260,14 +263,23 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             return
         }
         failures += 1
-        if failures > 3 { return showError("TimeTracker stopped. Quit it and open it again.") }
+        if failures > 3 { return showError("\(appName) stopped. Quit it and open it again.") }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.startServer() }
     }
 
     func relaunch() {
         let cfg = NSWorkspace.OpenConfiguration()
         cfg.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: cfg) { _, _ in
+        // Found by identity when this copy's path has gone: an update can
+        // rename the app — TimeTracker became Tomat — and reopening the old
+        // path would open nothing and leave the window closed.
+        var at = Bundle.main.bundleURL
+        if !FileManager.default.fileExists(atPath: at.path),
+           let id = Bundle.main.bundleIdentifier,
+           let found = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+            at = found
+        }
+        NSWorkspace.shared.openApplication(at: at, configuration: cfg) { _, _ in
             DispatchQueue.main.async { self.leaving = true; NSApp.terminate(nil) }
         }
     }
@@ -341,7 +353,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     @objc func reload(_ sender: Any?) { web.reload() }
 
     func buildMenu() {
-        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "TimeTracker"
+        let name = appName
         let bar = NSMenu()
         func menu(_ title: String, _ items: [NSMenuItem]) {
             let m = NSMenu(title: title)

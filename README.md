@@ -1,4 +1,4 @@
-# TimeTracker
+# Tomat 🍅
 
 > *Simplicity is prerequisite for reliability.*
 > — Edsger W. Dijkstra, EWD498
@@ -14,12 +14,13 @@ git clone https://github.com/Hamunk/timetracker.git && cd timetracker && ./spotl
 ```
 
 If macOS offers to install the command line developer tools, click Install,
-wait for it to finish, and paste the line again. TimeTracker opens by itself
+wait for it to finish, and paste the line again. Tomat opens by itself
 when it is done and asks what you work on.
 
 ## Use
 
-Open **TimeTracker** like any other app. Choose a subject to start; press
+Open **Tomat** like any other app — or type `time` in Spotlight, which finds
+it too. Choose a subject to start; press
 Stop when you are done. Starting asks for a plan and stopping asks what you
 got done; both are optional, and Cancel means nothing happened.
 
@@ -27,6 +28,7 @@ Or, faster, from Spotlight (<kbd>⌘</kbd> <kbd>Space</kbd>):
 
 | Type | Does |
 |---|---|
+| `tomat` | open the app |
 | `time` | stop, or start the last subject |
 | `time calculus` | start or switch to a subject, by name, code or keyword |
 | `time update` | install the newest version |
@@ -38,6 +40,10 @@ and Messages.
 
 **Friends** can see where each other is in the pomodoro and write during
 breaks. Add one by their username; they accept. Off until you turn it on.
+
+**Calendar** copies your sessions into a calendar you choose — your main one
+is fine. Tomat only ever changes events it added itself, and leaves alone any
+of those you move, edit or delete.
 
 ## Update
 
@@ -77,12 +83,12 @@ Bump `VERSION` in the same commit; `time update` refuses a tag whose
 
 ## Working on it
 
-`./dev.sh` builds a second, separate install (`devtime`, *TimeTracker
-devtime*) with its own data and identity, so the program can be changed while
+`./dev.sh` builds a second, separate install (`devtime`, *Tomat
+(devtime)*) with its own data and identity, so the program can be changed while
 the real one is in use. [CLAUDE.md](CLAUDE.md) describes the arrangement.
 
 Tests: `python3 spotlight/migrate.test.py`, `python3 spotlight/chat.test.py`,
-and `python3 .claude/hooks/guard-prod.test.py`.
+`./spotlight/paintplan.test.sh`, and `python3 .claude/hooks/guard-prod.test.py`.
 
 ## License
 

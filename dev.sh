@@ -131,7 +131,7 @@ cmd_relay() {
 # arrives is printed. It uses the scratch install's own helper and the
 # stand-in relay, never ntfy.sh, and `./dev.sh relay` has to be running.
 cmd_friend() {
-    local bin="$TIMETRACK_APPS_DIR/TimeTracker Chat.app/Contents/MacOS/ttchat"
+    local bin="$TIMETRACK_APPS_DIR/Helpers.noindex/Tomat Chat.app/Contents/MacOS/ttchat"
     local name="${1:-devfriend}" me d code id
     [[ -x "$bin" ]] || { printf 'No scratch install. ./dev.sh install first.\n'; return 1; }
     me=$(head -1 "$TIMETRACK_DIR/chat-name" 2>/dev/null)
@@ -206,15 +206,20 @@ running() {
     # name would count the other install's processes as this one's.
     local bin="$1/bin" apps="$2" out q
     q() { printf '%s' "$1" | sed 's#[][^$.*+?(){}|\\]#\\&#g'; }
+    # The helpers live in Helpers.noindex under Tomat names since 2.0, and at
+    # the top of the folder under TimeTracker names before it. Both, because
+    # the side being checked may be either — and a check that missed a live
+    # overlay is the one that lets install-real end a break.
+    local h="($(q "$apps")/Helpers\.noindex/Tomat|$(q "$apps")/TimeTracker)"
     pgrep -f "^$(q "$bin")/pomodoro-watch\.sh" >/dev/null 2>&1 && printf ' watcher'
-    pgrep -f "^$(q "$apps")/TimeTracker Prompt\.app/Contents/MacOS/ttprompt overlay" \
+    pgrep -f "^$h Prompt\.app/Contents/MacOS/ttprompt overlay" \
         >/dev/null 2>&1 && printf ' overlay'
     # /usr/bin/python3 is a shim that execs the real interpreter, so the server
     # shows up under the interpreter's path, not the one it was started with.
     pgrep -f " $(q "$bin")/dashboard\.py( |$)" >/dev/null 2>&1 && printf ' server'
-    pgrep -f "^$(q "$apps")/TimeTracker[^/]*\.app/Contents/MacOS/ttapp" \
+    pgrep -f "^$(q "$apps")/(Tomat|TimeTracker)[^/]*\.app/Contents/MacOS/ttapp" \
         >/dev/null 2>&1 && printf ' app'
-    pgrep -f "^$(q "$apps")/TimeTracker Chat\.app/Contents/MacOS/ttchat break" \
+    pgrep -f "^$h Chat\.app/Contents/MacOS/ttchat break" \
         >/dev/null 2>&1 && printf ' chat'
     return 0
 }

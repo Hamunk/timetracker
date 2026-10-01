@@ -1,6 +1,6 @@
 <!doctype html>
-<!-- TimeTracker's window. Served by dashboard.py on 127.0.0.1, shown by
-     TimeTracker.app in a web view (or, without the app, by the browser).
+<!-- Tomat's window. Served by dashboard.py on 127.0.0.1, shown by
+     Tomat.app in a web view (or, without the app, by the browser).
      One page, six views and a first-run setup, all drawn from the JSON the
      server reads out of the data folder; every change goes back to it as a
      POST, which hands it to action.sh, start.sh or the chat helper.
@@ -10,7 +10,7 @@
      progress is the only large thing on screen. -->
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TimeTracker</title>
+<title>Tomat</title>
 <style>
 :root{color-scheme:light dark;
 --bg:#f6f5f2;--side:#efeee9;--fg:#1d1d1b;--mut:#85827b;--faint:#b5b1a9;
@@ -287,6 +287,7 @@ border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
   <b class="verb">time</b> and the subject, and press <kbd>Return</kbd>. Type <b class="verb">time</b>
   alone to stop.</p>
   <table>
+    <tr><td><code>tomat</code></td><td>Open this window</td></tr>
     <tr><td><code class="verb">time</code></td><td>Stop, or start the last subject</td></tr>
     <tr><td><code><span class="verb">time</span> calculus</code></td><td>Start or switch to a subject, by name, code or keyword</td></tr>
     <tr><td><code><span class="verb">time</span> update</code></td><td>Install the newest version</td></tr>
@@ -313,7 +314,7 @@ border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--field)}
   <div class="wrap">
     <div class="step" data-step="0">
       <div class="mark">🍅</div>
-      <h1>TimeTracker</h1>
+      <h1>Tomat</h1>
       <p class="lead">Track what you work on, and take real breaks.</p>
       <div class="foot"><button class="btn primary big" data-next>Get started</button></div>
     </div>
@@ -370,7 +371,7 @@ async function post(path,body){
       body:JSON.stringify(body||{})});
     let j={};try{j=await r.json();}catch(e){}
     return Object.assign({ok:!!j.ok,message:j.message||(r.ok?"":"Something went wrong")},j);
-  }catch(e){return {ok:false,message:"TimeTracker is not responding"};}
+  }catch(e){return {ok:false,message:"Tomat is not responding"};}
 }
 let toastT=null;
 function toast(msg,bad){
@@ -759,7 +760,7 @@ function where(f){
 function renderFriends(){
   const box=$("p-friends"),out=[el("h1",{},"Friends")];
   if(!F.installed){box.replaceChildren(...out,el("p",{class:"lead"},
-    "Messages needs the Xcode command line tools. Install them, then update TimeTracker."));return;}
+    "Messages needs the Xcode command line tools. Install them, then update Tomat."));return;}
   const tog=el("input",{type:"checkbox"});tog.checked=!!F.on;
   tog.addEventListener("change",async()=>{
     const r=await post("/api/setconf",{changes:{chat:tog.checked?"on":"off"}});
@@ -942,7 +943,7 @@ function renderSettings(){
   const up=el("button",{class:"btn"},"Check for updates");
   const upline=el("span",{class:"mut",style:"font-size:12.5px"});
   up.addEventListener("click",()=>checkUpdate(up,upline));
-  out.push(el("h2",{},"TimeTracker"),el("div",{class:"list"},
+  out.push(el("h2",{},"Tomat"),el("div",{class:"list"},
     el("div",{class:"set"},el("span",{class:"lbl"},"Version "+SET.version,upline),up),
     el("div",{class:"set"},el("span",{class:"lbl"},"Your data",
       el("small",{},SET.data_dir+(SET.backups.count?" · backed up before every update":""))),
@@ -998,7 +999,7 @@ async function checkUpdate(btn,line){
   btn.textContent="Update to "+r.latest;btn.classList.add("primary");
   btn.onclick=async()=>{
     if(S&&S.pomodoro){toast("Update when the pomodoro has ended",true);return;}
-    btn.disabled=true;btn.textContent="Updating…";line.textContent=" · TimeTracker restarts when it is done";
+    btn.disabled=true;btn.textContent="Updating…";line.textContent=" · Tomat restarts when it is done";
     const u=await post("/api/update/run",{});if(!u.ok){toast(u.message,true);btn.disabled=false;}
   };
 }

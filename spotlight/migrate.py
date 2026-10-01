@@ -319,7 +319,7 @@ def has_data():
 def install(old, new):
     found = data_version()
     if found > DATA_VERSION:
-        say(f"This data was written by a newer TimeTracker (data format {found}; "
+        say(f"This data was written by a newer Tomat (data format {found}; "
             f"this version reads up to {DATA_VERSION}).\n"
             "Install that version or a newer one. Nothing was changed.")
         return 3

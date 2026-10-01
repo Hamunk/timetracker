@@ -78,7 +78,7 @@ on run argv
     tell application "System Events"
         activate
         try
-            set r to display dialog (item 1 of argv) with title "TimeTracker" ¬
+            set r to display dialog (item 1 of argv) with title "Tomat" ¬
                 buttons btns default button (count of btns)
             return button returned of r
         on error
@@ -111,7 +111,7 @@ if [[ -z "$latest" ]]; then
     exit 1
 fi
 if ! newer "$latest" "$installed"; then
-    say "TimeTracker is up to date ($installed)."
+    say "Tomat is up to date ($installed)."
     exit 0
 fi
 

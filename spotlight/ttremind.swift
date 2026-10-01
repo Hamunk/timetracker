@@ -10,7 +10,7 @@
 // access to a bundle launched through LaunchServices. Exec'ing this binary
 // directly is denied without a prompt.
 //
-//   TimeTracker Reminders.app --args <dir>/.tomato-reminder
+//   Tomat Reminders.app --args <dir>/.tomato-reminder
 //
 // The input file is two tab-separated lines, written by the overlay:
 //
@@ -23,9 +23,8 @@
 //   denied<TAB>                 permission refused (or never asked)
 //   error<TAB>what went wrong   anything else
 //
-// Launched with no usable input — double-clicked, or from Spotlight as
-// "time reminders" — it asks for access and reports, and writes nothing to
-// your reminders. That is the *point* of it being launchable: a permission
+// Launched with no note at the path — by the app's Reminders switch — it
+// asks for access and reports, and writes nothing to your reminders. That is the *point* of it being launchable: a permission
 // prompt answered at a calm moment is a prompt that never lands mid-break.
 //
 // Why full access for a feature that only ever writes: EventKit has no

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""TimeTracker's local server: the app's window onto the data.
+"""Tomat's local server: the app's window onto the data.
 
-    dashboard.py --app        what TimeTracker.app runs: prints "<port> <token>"
+    dashboard.py --app        what Tomat.app runs: prints "<port> <token>"
                               and serves until the app that started it is gone
     dashboard.py [--page P]   without the app (no compiler, so none was built):
                               opens the same page in the browser instead
@@ -81,7 +81,8 @@ PAINT_SH = os.path.join(HERE, "paint-calendar.sh")
 UPDATE_SH = os.path.join(HERE, "update.sh")
 APP_HTML = os.path.join(HERE, "app.html")
 VERSION_FILE = os.path.join(HERE, "VERSION")
-CHAT_BIN = os.path.join(APPS_DIR, "TimeTracker Chat.app", "Contents", "MacOS", "ttchat")
+HELPERS_DIR = os.path.join(APPS_DIR, "Helpers.noindex")
+CHAT_BIN = os.path.join(HELPERS_DIR, "Tomat Chat.app", "Contents", "MacOS", "ttchat")
 
 MAX_BODY = 8192  # a mutation request is a few hundred bytes; cap it well below
 IDLE_TIMEOUT = 600  # browser mode: seconds without a request before exiting
@@ -823,7 +824,7 @@ def ask_permission(tool):
     handed a path in this install's folder, which is where it answers.
     """
     if tool == "reminders":
-        app = os.path.join(APPS_DIR, "TimeTracker Reminders.app")
+        app = os.path.join(HELPERS_DIR, "Tomat Reminders.app")
         if not os.path.isdir(app):
             return "missing"
         res = os.path.join(DATA_DIR, ".tomato-reminder-result")
@@ -832,7 +833,7 @@ def ask_permission(tool):
              os.path.join(DATA_DIR, ".tomato-reminder")], timeout=90)
         return {"ok": "granted", "denied": "denied"}.get(take(res), "error")
     if tool == "spotify":
-        app = os.path.join(APPS_DIR, f"{VERB} spotify.app")
+        app = os.path.join(HELPERS_DIR, "Tomat Spotify.app")
         if not os.path.isdir(app):
             return "missing"
         res = os.path.join(DATA_DIR, ".spotify-check")
@@ -1070,7 +1071,7 @@ PAGES = ("now", "history", "subjects", "friends", "settings", "help")
 
 if __name__ == "__main__":
     if not os.path.isdir(DATA_DIR):
-        sys.exit(f"No data folder at {DATA_DIR}. Install TimeTracker first.")
+        sys.exit(f"No data folder at {DATA_DIR}. Install Tomat first.")
     args = sys.argv[1:]
     page = "now"
     if "--page" in args:

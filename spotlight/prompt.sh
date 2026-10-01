@@ -32,7 +32,7 @@ esac
 
 DATA_DIR="${TIMETRACK_DIR:-$HOME/.timetrack}"
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
-PROMPT_APP="$APPS_DIR/TimeTracker Prompt.app"
+PROMPT_APP="$APPS_DIR/Helpers.noindex/Tomat Prompt.app"
 ANSWER_FILE="$DATA_DIR/.prompt-answer"
 
 if [[ -x "$PROMPT_APP/Contents/MacOS/ttprompt" ]]; then
@@ -62,7 +62,7 @@ on run argv
         activate
         try
             set r to display dialog (item 1 of argv) default answer "" ¬
-                with title "TimeTracker" buttons {item 2 of argv, item 3 of argv} ¬
+                with title "Tomat" buttons {item 2 of argv, item 3 of argv} ¬
                 default button 2 cancel button 1 giving up after 120
             return "OK" & tab & (text returned of r)
         on error

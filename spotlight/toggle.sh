@@ -53,7 +53,7 @@ case "${status:-}" in
                 "$CAT_FILE" | sort -k1,1nr | head -1 | cut -f2)
         fi
         if [[ -z "$recent" ]]; then
-            "$BIN_DIR/notify.sh" "No subjects yet. Open TimeTracker to add one"
+            "$BIN_DIR/notify.sh" "No subjects yet. Open Tomat to add one"
         else
             exec "$BIN_DIR/start.sh" "$recent"
         fi

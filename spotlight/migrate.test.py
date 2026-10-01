@@ -136,7 +136,7 @@ def newer():
     d = folder({"sessions.tsv": log, "data-version": "9\n"})
     r = run(d, "--install", "2.0.0", "2.0.0")
     check("exits 3", r.returncode == 3)
-    check("says why", "newer TimeTracker" in r.stdout)
+    check("says why", "newer Tomat" in r.stdout)
     check("takes no snapshot", backups(d) == [])
     check("leaves data-version", read(d, "data-version") == "9\n")
 

@@ -72,15 +72,14 @@ CHAT_CMD="$DATA_DIR/.tomato-chat-cmd"
 CHAT_STATE="$DATA_DIR/.tomato-chat"
 OVERLAY_STALE=25   # two helper heartbeats plus slack
 APPS_DIR="${TIMETRACK_APPS_DIR:-$HOME/Applications/TimeTracker}"
-HELPER_BIN="$APPS_DIR/TimeTracker Prompt.app/Contents/MacOS/ttprompt"
-MEDIA_APP="$APPS_DIR/TimeTracker Media.app"
-# A Spotlight verb ("time spotify"), not a hidden name like the media bundle:
-# there is exactly one bundle allowed to talk to Spotify — a second would be a
-# second Automation prompt — so the one that does it is also the one you run by
-# hand to answer that prompt before a break ever raises it.
-SPOTIFY_APP="$APPS_DIR/${TIMETRACK_VERB:-time} spotify.app"
-REMINDERS_APP="$APPS_DIR/TimeTracker Reminders.app"
-CHAT_BIN="$APPS_DIR/TimeTracker Chat.app/Contents/MacOS/ttchat"
+HELPERS_DIR="$APPS_DIR/Helpers.noindex"
+HELPER_BIN="$HELPERS_DIR/Tomat Prompt.app/Contents/MacOS/ttprompt"
+MEDIA_APP="$HELPERS_DIR/Tomat Media.app"
+# Exactly one bundle is allowed to talk to Spotify — a second would be a
+# second Automation prompt — and the app's Spotify switch asks through it too.
+SPOTIFY_APP="$HELPERS_DIR/Tomat Spotify.app"
+REMINDERS_APP="$HELPERS_DIR/Tomat Reminders.app"
+CHAT_BIN="$HELPERS_DIR/Tomat Chat.app/Contents/MacOS/ttchat"
 TICK=10
 
 # The durations all come from the settings table — the one in settings.sh.

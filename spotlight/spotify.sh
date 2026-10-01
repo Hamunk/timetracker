@@ -332,7 +332,7 @@ if [[ ! -f "$POMO_FILE" ]]; then
 on run argv
     tell application "System Events"
         activate
-        display dialog (item 1 of argv) with title "TimeTracker Spotify" ¬
+        display dialog (item 1 of argv) with title "Tomat" ¬
             buttons {"OK"} default button "OK"
     end tell
 end run

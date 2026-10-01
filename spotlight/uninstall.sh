@@ -33,10 +33,12 @@ done
 # so the path has to be quoted before it can be used as one.
 re_quote() { printf '%s' "$1" | sed 's#[][^$.*+?(){}|\\]#\\&#g'; }
 pkill -f "^$(re_quote "$BIN_DIR")/(pomodoro-watch|spotify)\.sh" 2>/dev/null
-pkill -f "^$(re_quote "$APPS_DIR")/TimeTracker Prompt\.app/Contents/MacOS/ttprompt overlay" \
-    2>/dev/null
-pkill -f "^$(re_quote "$APPS_DIR")/TimeTracker Chat\.app/Contents/MacOS/ttchat break" \
-    2>/dev/null
+# Both the helpers' homes: Helpers.noindex since 2.0, the top of the folder
+# before it, for an older install's break that is still going.
+for h in "$APPS_DIR/Helpers.noindex/Tomat" "$APPS_DIR/TimeTracker"; do
+    pkill -f "^$(re_quote "$h") Prompt\.app/Contents/MacOS/ttprompt overlay" 2>/dev/null
+    pkill -f "^$(re_quote "$h") Chat\.app/Contents/MacOS/ttchat break" 2>/dev/null
+done
 rm -f "$DATA_DIR/pomodoro" "$DATA_DIR/.tomato-choice" "$DATA_DIR/.tomato-alive" \
       "$DATA_DIR/.prompt-answer" "$DATA_DIR/.tomato-audio" \
       "$DATA_DIR/.tomato-overlay.pid" \
@@ -69,7 +71,7 @@ rm -f "$DATA_DIR/.calendar-events.tsv" "$DATA_DIR/.calendar-handled" \
       "$DATA_DIR/calendar-agent.log"
 
 if [[ -d "$APPS_DIR" ]]; then
-    for app_path in "$APPS_DIR"/*.app; do
+    for app_path in "$APPS_DIR"/*.app "$APPS_DIR/Helpers.noindex"/*.app; do
         [[ -e "$app_path" ]] || continue
         # The app, if it is open, is asked to quit by its own identity —
         # this install's, read off the bundle, never the other install's.
@@ -104,6 +106,6 @@ fi
 # Two permissions outlive the apps that used them, and macOS keeps them listed
 # against names that no longer exist.
 printf 'Revoke what is left in System Settings > Privacy & Security:\n'
-printf '  Automation > TimeTracker Spotify     (control of Spotify)\n'
-printf '  Calendars  > TimeTracker Calendar    (painting your sessions)\n'
-printf '  Reminders  > TimeTracker Reminders   (break notes)\n'
+printf '  Automation > Tomat Spotify     (control of Spotify)\n'
+printf '  Calendars  > Tomat Calendar    (writing your sessions)\n'
+printf '  Reminders  > Tomat Reminders   (break notes)\n'

@@ -12,9 +12,9 @@
 // bundle launched through LaunchServices. Exec'ing the binary directly is
 // denied without a prompt.
 //
-//   TimeTracker Calendar.app --args <dir>/.paint-request.tsv    paint it, or,
-//                                       with no such file there, list calendars
-//   TimeTracker Calendar.app                                    list, into ~/.timetrack
+//   Tomat Calendar.app --args <dir>/.paint-request.tsv    paint it, or, with
+//                                       no such file there, list calendars
+//   Tomat Calendar.app                                    list, into ~/.timetrack
 //
 // The request file, tab separated, written by paint-calendar.sh:
 //
@@ -120,10 +120,9 @@ _ = sem.wait(timeout: .now() + 60)
 if !granted { finish(["denied", ""], code: 1) }
 
 // --- no request: list what there is ------------------------------------------
-// This is the "time calendar" launch, and the only reason the app is worth
-// running by hand: it answers the permission prompt at a calm moment and dumps
-// the calendars you could paint into, which is what the settings page offers
-// you to choose from. It writes nothing to any calendar.
+// What the app's Calendar switch runs: it raises the permission prompt at a
+// calm moment and dumps the calendars you could paint into, which is what the
+// settings page offers you to choose from. It writes nothing to any calendar.
 
 if listing {
     var out = "STATUS\tok\n"
